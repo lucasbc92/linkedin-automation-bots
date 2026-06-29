@@ -34,7 +34,9 @@ _CONVERSATION_LIST = "ul.msg-conversations-container__conversations-list"
 _CARD_ITEM = "li.msg-conversation-listitem"
 _NAME_SELECTOR = "h3.msg-conversation-listitem__participant-names span.truncate"
 _TIME_SELECTOR = "time.msg-conversation-listitem__time-stamp"
-_SPONSORED_SELECTOR = "span.msg-conversation-card__pill"
+_CARD_PILL_SELECTOR = "span.msg-conversation-card__pill"
+# Pill labels that mean the conversation should be left untouched.
+_SKIP_PILL_LABELS = ("sponsored", "inmail", "linkedin offer")
 _COMPOSE_BOX = "div.msg-form__contenteditable[contenteditable='true'][role='textbox']"
 _THREAD_HEADER_NAME = (
     "h2.msg-entity-lockup__entity-title,"
@@ -303,12 +305,26 @@ class LinkedInMessageBot:
         except Exception:
             return None
 
-    def _card_is_sponsored(self, card):
+    def _card_skip_pill(self, card):
+        """Return the pill label ("Sponsored"/"InMail") if the card carries a
+        pill that means we should not message it, else ``None``.
+
+        Sponsored ads and InMails share the same pill component; we match on
+        the pill text so both are skipped without messaging.
+        """
         try:
-            pills = card.find_elements(By.CSS_SELECTOR, _SPONSORED_SELECTOR)
-            return any("sponsored" in p.text.lower() for p in pills)
+            pills = card.find_elements(By.CSS_SELECTOR, _CARD_PILL_SELECTOR)
         except Exception:
-            return False
+            return None
+        for p in pills:
+            try:
+                text = p.text.lower()
+            except Exception:
+                continue
+            for label in _SKIP_PILL_LABELS:
+                if label in text:
+                    return p.text.strip() or label.capitalize()
+        return None
 
     def _scroll_list_bottom(self):
         """Scroll the conversation list container to trigger lazy-loading."""
@@ -413,9 +429,10 @@ class LinkedInMessageBot:
                     name_full = self._card_name(card)
                     if not name_full or name_full in processed:
                         continue
-                    if self._card_is_sponsored(card):
+                    pill = self._card_skip_pill(card)
+                    if pill:
                         processed.add(name_full)
-                        logger.debug(f"Skipping Sponsored: {name_full}")
+                        logger.debug(f"Skipping {pill}: {name_full}")
                         continue
                     target = card
                     break

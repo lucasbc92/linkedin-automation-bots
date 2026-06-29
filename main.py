@@ -141,7 +141,8 @@ def build_parser():
         "message",
         help="Send follow-up messages to existing connections",
         description="Walk the LinkedIn Messaging inbox and send a personalized "
-                    "follow-up to every non-sponsored conversation, newest first.",
+                    "follow-up to every conversation (skipping Sponsored, "
+                    "InMail and LinkedIn Offer), newest first.",
         epilog=_MESSAGE_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

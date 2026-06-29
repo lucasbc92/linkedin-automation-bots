@@ -67,7 +67,7 @@ Key elements (from the spec HTML):
 | Conversation list | `ul.msg-conversations-container__conversations-list` → `li` |
 | Participant name | `h3.msg-conversation-listitem__participant-names span.truncate` |
 | Timestamp | `time.msg-conversation-listitem__time-stamp` |
-| Sponsored marker | `span.msg-conversation-card__pill` (text "Sponsored") |
+| Skip marker | `span.msg-conversation-card__pill` (text "Sponsored", "InMail" or "LinkedIn Offer") |
 | Compose box | `div.msg-form__contenteditable[contenteditable="true"][role="textbox"]` in `form.msg-form` |
 
 ## Core algorithm (`run`)
@@ -78,7 +78,7 @@ templates = MessageTemplates("message/templates/message.txt")
 processed = set()                      # participant names already handled
 loop:
     cards = all <li> conversation cards currently in the list
-    target = first card whose name not in processed AND not Sponsored
+    target = first card whose name not in processed AND not Sponsored/InMail/LinkedIn Offer
     if target is None:
         scroll list container to bottom to lazy-load more
         if card count did not grow -> break          # real bottom reached
