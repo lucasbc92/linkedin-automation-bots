@@ -1,0 +1,3 @@
+Olá, {name}! 😄
+Dev Java Full Stack há 7 anos entregando sistemas críticos em Spring e React/Angular, de fintech (Magalu, Cast Group: reforma tributária) a fidelização (Vivo Valoriza), atuando junto a agentes de IA (Cursor/Claude Code) orientados a negócio.
+Busco oportunidade 100% remota!

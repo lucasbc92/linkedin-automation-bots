@@ -1,0 +1,4 @@
+Olá, {name}!
+Sou Dev Java Full Stack (7 anos) com Spring e React/Angular, criando sistemas críticos em fintech (Magalu, Cast Group) e fidelização (Vivo Valoriza).
+No dia a dia desenvolvo com IA agêntica (Cursor e Claude Code) orientada a negócio.
+Procuro uma vaga 100% remota. Vamos conectar? 🚀
