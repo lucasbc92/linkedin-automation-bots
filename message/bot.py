@@ -352,6 +352,44 @@ class LinkedInMessageBot:
             time.sleep(0.4)
         return None
 
+    def _build_skip_set(self):
+        """Return names to skip based on the currently active (clicked) card.
+
+        If a conversation is already open when the bot starts, all cards from
+        the top of the list down to and including that card are added to the
+        skip set, so the bot begins processing from the next card below.
+
+        If no card is active, returns an empty set (process from the top).
+        """
+        skipped = set()
+        try:
+            cards = self._get_cards()
+            for card in cards:
+                name = self._card_name(card)
+                if name:
+                    skipped.add(name)
+                # Stop as soon as we hit the active card
+                try:
+                    active = card.find_elements(
+                        By.CSS_SELECTOR,
+                        ".msg-conversations-container__convo-item-link--active")
+                    if active:
+                        break
+                except Exception:
+                    pass
+            else:
+                # Loop completed without finding an active card → start from top
+                return set()
+        except Exception as e:
+            logger.debug(f"Could not determine starting position: {e}")
+            return set()
+
+        if skipped:
+            logger.info(
+                f"Starting from contact below the active card — "
+                f"skipping {len(skipped)} conversation(s) above.")
+        return skipped
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
@@ -361,7 +399,7 @@ class LinkedInMessageBot:
         prevent_sleep()
         self._select_messaging_tab()
 
-        processed = set()   # full participant names already handled
+        processed = self._build_skip_set()   # names already handled / to skip
 
         try:
             while True:
