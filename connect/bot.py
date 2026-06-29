@@ -12,6 +12,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from common.browser import create_driver
+from common.messages import MessageTemplates
 from common.names import display_first_name
 from common.sleep import allow_sleep, prevent_sleep
 
@@ -38,80 +39,12 @@ class LinkedInConnectBot:
         self.wait = WebDriverWait(self.driver, 10)
         self.short_wait = WebDriverWait(self.driver, 3)
 
-        self.message_templates = [] if no_message else self.load_message_templates(message_file)
+        self._msg = (None if no_message
+                     else MessageTemplates(message_file, max_length=300))
 
         self.connections_sent = 0
         self.connections_failed = 0
         self.connections_skipped = 0
-
-    MESSAGE_SEPARATOR = re.compile(r"^\s*-{3,}\s*$", re.MULTILINE)
-    DEFAULT_MESSAGE = "Hello {name}! I'd like to connect with you."
-
-    def load_message_templates(self, file_path):
-        """Load one or more message variations from a text file.
-
-        Variations are separated by a line containing only dashes ("---").
-        Each variation is trimmed and capped at LinkedIn's 300-char limit.
-        Returns a list with at least one template, or [] in no-message mode.
-        """
-        try:
-            if self.no_message or not file_path:
-                return []
-
-            import os
-            if not os.path.exists(file_path):
-                logger.warning(f"Message file '{file_path}' not found. Using default message.")
-                return [self.DEFAULT_MESSAGE]
-
-            with open(file_path, 'r', encoding='utf-8') as f:
-                raw = f.read()
-
-            variations = [v.strip() for v in self.MESSAGE_SEPARATOR.split(raw)]
-            variations = [v for v in variations if v]
-
-            if not variations:
-                logger.warning("Message file is empty. Using default message.")
-                return [self.DEFAULT_MESSAGE]
-
-            cleaned = []
-            for v in variations:
-                if len(v) > 300:
-                    v = v[:300]
-                    logger.warning("A message variation exceeded 300 chars and was truncated.")
-                cleaned.append(v)
-
-            logger.info(f"Loaded {len(cleaned)} message variation(s) from '{file_path}'.")
-            return cleaned
-
-        except Exception as e:
-            logger.error(f"Error loading message file: {e}. Using default message.")
-            return [self.DEFAULT_MESSAGE]
-
-    @staticmethod
-    def _message_length(text):
-        """Count chars the way LinkedIn does: UTF-16 code units (emoji = 2)."""
-        return len(text.encode('utf-16-le')) // 2
-
-    def _remove_name_placeholder(self, template):
-        """Drop {name} along with an adjacent comma/space so greeting still reads cleanly."""
-        return re.sub(r",?\s*\{name\}", "", template)
-
-    def personalize_message(self, name=None):
-        """Pick a random variation and fill in the name, falling back to no-name if too long."""
-        if not self.message_templates:
-            return ""
-
-        template = random.choice(self.message_templates)
-
-        if name:
-            personalized = template.replace("{name}", name)
-            if self._message_length(personalized) <= 300:
-                return personalized
-            logger.warning(
-                f"Message would be {self._message_length(personalized)} chars with "
-                f"'{name}' (limit 300). Omitting name for this invite.")
-
-        return self._remove_name_placeholder(template)
 
     def _cdp_click(self, element, description="element"):
         """Dispatch a trusted click via Chrome DevTools Protocol.
@@ -694,7 +627,7 @@ class LinkedInConnectBot:
                         self.connections_skipped += 1
                         continue
 
-                    personalized_message = self.personalize_message(name)
+                    personalized_message = self._msg.personalize(name)
                     logger.info(
                         f"Sending to {name or target_label}: "
                         f"{personalized_message.splitlines()[0] if personalized_message else ''}")
@@ -707,7 +640,7 @@ class LinkedInConnectBot:
                             "return (arguments[0].value || '').length;", message_box)
                         logger.debug(
                             f"Textarea length as seen by LinkedIn: {textarea_len} "
-                            f"(expected {self._message_length(personalized_message)})")
+                            f"(expected {len(personalized_message.encode('utf-16-le')) // 2})")
                     except Exception:
                         pass
 

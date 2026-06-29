@@ -1,0 +1,13 @@
+Oi, {name}! Obrigado por aceitar o meu convite 😊
+Estou em busca de oportunidades remotas como Dev Java Full Stack — tenho 7 anos de experiência com Spring Boot e React/Angular em projetos críticos de fintech (Magalu, Cast Group) e fidelização (Vivo Valoriza), com forte uso de IA agêntica (Cursor/Claude Code) no dia a dia.
+Caso apareça alguma vaga alinhada a esse perfil, fico à disposição!
+
+Abs,
+Lucas
+---
+Oi, {name}, obrigado por conectar! 😊
+Sou Dev Java Full Stack com 7 anos de experiência em Spring Boot e React/Angular — de fintech (Magalu) a fidelização (Vivo Valoriza) — e trabalho com IA agêntica (Cursor/Claude Code) orientada a negócio.
+Busco oportunidade 100% remota. Se surgir algo no seu radar, adoraria conversar!
+
+Abs,
+Lucas

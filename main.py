@@ -1,6 +1,7 @@
 import argparse
 import logging
 import sys
+from datetime import date
 
 from common.logging_setup import setup_logging
 
@@ -26,7 +27,15 @@ def build_parser():
                     help="Log verbosity (default: DEBUG)")
 
     # message
-    mp = sub.add_parser("message", help="Send messages to existing connections")
+    mp = sub.add_parser("message", help="Send follow-up messages to existing connections")
+    mp.add_argument("-m", "--message", default="message/templates/message.txt",
+                    help="Path to message template file (default: message/templates/message.txt)")
+    mp.add_argument("--date-limit", metavar="YYYY/MM/DD",
+                    help="Stop when reaching conversations older than this date")
+    mp.add_argument("--dry-run", action="store_true",
+                    help="Log who would be messaged without sending anything")
+    mp.add_argument("--max", dest="max_messages", type=int, metavar="N",
+                    help="Stop after sending N messages")
     mp.add_argument("-l", "--log-level", default="DEBUG",
                     choices=["DEBUG", "INFO", "WARN", "ERROR"],
                     help="Log verbosity (default: DEBUG)")
@@ -66,7 +75,38 @@ def run_connect(args):
 def run_message(args):
     level_name = "WARNING" if args.log_level == "WARN" else args.log_level
     logger = setup_logging(level=getattr(logging, level_name, logging.DEBUG))
-    logger.info("LinkedIn Message Bot — not yet implemented.")
+
+    date_limit = None
+    if args.date_limit:
+        try:
+            parts = args.date_limit.replace("-", "/").split("/")
+            date_limit = date(int(parts[0]), int(parts[1]), int(parts[2]))
+        except Exception:
+            logger.error(f"Invalid --date-limit '{args.date_limit}'. Use YYYY/MM/DD.")
+            sys.exit(1)
+
+    logger.info("=" * 60)
+    logger.info("LinkedIn Message Bot")
+    logger.info(f"  Message    : {args.message}")
+    logger.info(f"  Date limit : {date_limit or 'none (full list)'}")
+    logger.info(f"  Dry run    : {'yes' if args.dry_run else 'no'}")
+    logger.info(f"  Max msgs   : {args.max_messages or 'unlimited'}")
+    logger.info(f"  Log level  : {args.log_level}")
+    logger.info("=" * 60)
+
+    from message.bot import LinkedInMessageBot
+    bot = LinkedInMessageBot(
+        message_file=args.message,
+        date_limit=date_limit,
+        dry_run=args.dry_run,
+        max_messages=args.max_messages,
+    )
+    try:
+        bot.run()
+    except KeyboardInterrupt:
+        logger.warning("Stopped by user (Ctrl+C)")
+    except Exception as e:
+        logger.error(f"Stopped due to error: {e}")
 
 
 if __name__ == "__main__":
