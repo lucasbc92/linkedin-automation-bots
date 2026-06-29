@@ -355,9 +355,10 @@ class LinkedInMessageBot:
     def _build_skip_set(self):
         """Return names to skip based on the currently active (clicked) card.
 
-        If a conversation is already open when the bot starts, all cards from
-        the top of the list down to and including that card are added to the
-        skip set, so the bot begins processing from the next card below.
+        If a conversation is already open when the bot starts, only the cards
+        *above* that card are added to the skip set. The active card itself is
+        left out so the bot begins processing *from* the clicked contact
+        (inclusive) and continues downward.
 
         If no card is active, returns an empty set (process from the top).
         """
@@ -365,10 +366,8 @@ class LinkedInMessageBot:
         try:
             cards = self._get_cards()
             for card in cards:
-                name = self._card_name(card)
-                if name:
-                    skipped.add(name)
-                # Stop as soon as we hit the active card
+                # Stop as soon as we hit the active card — it is the contact
+                # the user clicked, so it should be processed, not skipped.
                 try:
                     active = card.find_elements(
                         By.CSS_SELECTOR,
@@ -377,6 +376,9 @@ class LinkedInMessageBot:
                         break
                 except Exception:
                     pass
+                name = self._card_name(card)
+                if name:
+                    skipped.add(name)
             else:
                 # Loop completed without finding an active card → start from top
                 return set()
@@ -386,8 +388,8 @@ class LinkedInMessageBot:
 
         if skipped:
             logger.info(
-                f"Starting from contact below the active card — "
-                f"skipping {len(skipped)} conversation(s) above.")
+                f"Starting from the active (clicked) card — "
+                f"skipping {len(skipped)} conversation(s) above it.")
         return skipped
 
     # ------------------------------------------------------------------
