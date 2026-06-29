@@ -1,0 +1,6 @@
+[submodule "people-connect-bot"]
+	path = people-connect-bot
+	url = git@github.com:lucasbc92/linkedin-people-connect-bot.git
+[submodule "messaging-bot"]
+	path = messaging-bot
+	url = git@github.com:lucasbc92/linkedin-messaging-bot.git
