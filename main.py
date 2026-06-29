@@ -1,62 +1,176 @@
+"""LinkedIn automation bots — entry point.
+
+Usage
+-----
+  python main.py connect [options]   Send connection requests
+  python main.py message [options]   Send follow-up messages
+
+Shell tab-completion (one-time setup)
+--------------------------------------
+  Bash / Git Bash:
+      eval "$(register-python-argcomplete main.py)"
+      # Add that line to ~/.bashrc to make it permanent.
+
+  Zsh:
+      autoload -U bashcompinit && bashcompinit
+      eval "$(register-python-argcomplete main.py)"
+
+  PowerShell:
+      pip install argcomplete
+      Register-ArgumentCompleter -Native -CommandName python -ScriptBlock {
+          param($wordToComplete, $commandAst, $cursorPosition)
+          $env:_ARGCOMPLETE=1
+          $env:COMP_LINE = $commandAst.ToString()
+          $env:COMP_POINT = $cursorPosition
+          python main.py 2>&1 | ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+      }
+"""
+
 import argparse
 import logging
 import os
 import sys
 from datetime import date
+from pathlib import Path
+
+import argcomplete
+from argcomplete.completers import BaseCompleter
 
 from common.logging_setup import setup_logging
 
 _TEMPLATE_ROOT = "templates"
 
 
-def _resolve_template(filename, bot):
-    """Turn a bare filename into templates/<bot>/<filename>.
+# ---------------------------------------------------------------------------
+# Tab-completion helpers
+# ---------------------------------------------------------------------------
 
-    If the user already passed a path that contains a separator (e.g.
-    "templates/connect/message.txt" or "./msg.txt") it is used as-is,
-    so power users can always point at an arbitrary file.
-    """
+class _TemplateCompleter(BaseCompleter):
+    """Complete filenames from templates/<bot>/ for the -m flag."""
+
+    def __init__(self, bot):
+        self._bot = bot
+
+    def __call__(self, prefix, **kwargs):
+        folder = Path(_TEMPLATE_ROOT) / self._bot
+        try:
+            return [
+                p.name for p in folder.iterdir()
+                if p.suffix == ".txt" and p.name.startswith(prefix)
+            ]
+        except OSError:
+            return []
+
+
+# ---------------------------------------------------------------------------
+# Path resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_template(filename, bot):
+    """Prepend templates/<bot>/ unless the user already gave a path."""
     if os.sep in filename or "/" in filename:
         return filename
     return os.path.join(_TEMPLATE_ROOT, bot, filename)
 
 
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
+
+_CONNECT_EPILOG = """
+examples:
+  python main.py connect
+  python main.py connect -m message_formal.txt
+  python main.py connect -n                         # no note
+  python main.py connect -y -l INFO                 # auto-continue, less verbose
+  python main.py connect -r                         # navigate in reverse (Previous)
+
+templates live in:  templates/connect/
+"""
+
+_MESSAGE_EPILOG = """
+examples:
+  python main.py message
+  python main.py message --dry-run
+  python main.py message --max 10
+  python main.py message --date-limit 2025/12/31
+  python main.py message -m message_v2.txt --max 5 --dry-run
+
+templates live in:  templates/message/
+"""
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="python main.py",
-        description="LinkedIn automation bots")
+        description="LinkedIn automation bots. Attach Chrome with "
+                    "--remote-debugging-port=9222 before running.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    # connect
-    cp = sub.add_parser("connect", help="Send connection requests with personalized notes")
-    cp.add_argument("-y", "--yes", action="store_true",
-                    help="Auto-continue past close-to-limit warnings")
-    cp.add_argument("-m", "--message", default="message.txt", metavar="FILE",
-                    help="Template filename in templates/connect/ (default: message.txt)")
-    cp.add_argument("-r", "--reverse", action="store_true",
-                    help="Navigate in reverse (Previous instead of Next)")
-    cp.add_argument("-n", "--no-message", action="store_true",
-                    help="Send invitations without a note")
-    cp.add_argument("-l", "--log-level", default="DEBUG",
-                    choices=["DEBUG", "INFO", "WARN", "ERROR"],
-                    help="Log verbosity (default: DEBUG)")
+    # ---- connect ----
+    cp = sub.add_parser(
+        "connect",
+        help="Send connection requests with personalized notes",
+        description="Walk LinkedIn people-search results and send "
+                    "personalised connection invitations.",
+        epilog=_CONNECT_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    cp.add_argument(
+        "-y", "--yes", action="store_true",
+        help="Auto-continue past the weekly close-to-limit warning")
+    m_connect = cp.add_argument(
+        "-m", "--message", default="message.txt", metavar="FILE",
+        help="Template file in templates/connect/  (default: message.txt)")
+    m_connect.completer = _TemplateCompleter("connect")
+    cp.add_argument(
+        "-r", "--reverse", action="store_true",
+        help="Navigate in reverse order (click Previous instead of Next)")
+    cp.add_argument(
+        "-n", "--no-message", action="store_true",
+        help="Send invitations without an accompanying note")
+    cp.add_argument(
+        "-l", "--log-level", default="DEBUG",
+        choices=["DEBUG", "INFO", "WARN", "ERROR"],
+        help="Log verbosity (default: DEBUG)")
 
-    # message
-    mp = sub.add_parser("message", help="Send follow-up messages to existing connections")
-    mp.add_argument("-m", "--message", default="message.txt", metavar="FILE",
-                    help="Template filename in templates/message/ (default: message.txt)")
-    mp.add_argument("--date-limit", metavar="YYYY/MM/DD",
-                    help="Stop when reaching conversations older than this date")
-    mp.add_argument("--dry-run", action="store_true",
-                    help="Log who would be messaged without sending anything")
-    mp.add_argument("--max", dest="max_messages", type=int, metavar="N",
-                    help="Stop after sending N messages")
-    mp.add_argument("-l", "--log-level", default="DEBUG",
-                    choices=["DEBUG", "INFO", "WARN", "ERROR"],
-                    help="Log verbosity (default: DEBUG)")
+    # ---- message ----
+    mp = sub.add_parser(
+        "message",
+        help="Send follow-up messages to existing connections",
+        description="Walk the LinkedIn Messaging inbox and send a personalized "
+                    "follow-up to every non-sponsored conversation, newest first.",
+        epilog=_MESSAGE_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    m_message = mp.add_argument(
+        "-m", "--message", default="message.txt", metavar="FILE",
+        help="Template file in templates/message/  (default: message.txt)")
+    m_message.completer = _TemplateCompleter("message")
+    mp.add_argument(
+        "--date-limit", metavar="YYYY/MM/DD",
+        help="Stop when a conversation is older than this date "
+             "(the list is newest-first, so this halts the whole run)")
+    mp.add_argument(
+        "--dry-run", action="store_true",
+        help="Preview who would be messaged and with what text — nothing is sent")
+    mp.add_argument(
+        "--max", dest="max_messages", type=int, metavar="N",
+        help="Stop after sending N messages (blast-radius limit)")
+    mp.add_argument(
+        "-l", "--log-level", default="DEBUG",
+        choices=["DEBUG", "INFO", "WARN", "ERROR"],
+        help="Log verbosity (default: DEBUG)")
 
+    argcomplete.autocomplete(parser)
     return parser
 
+
+# ---------------------------------------------------------------------------
+# Runners
+# ---------------------------------------------------------------------------
 
 def run_connect(args):
     level_name = "WARNING" if args.log_level == "WARN" else args.log_level
@@ -127,6 +241,10 @@ def run_message(args):
     except Exception as e:
         logger.error(f"Stopped due to error: {e}")
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     parser = build_parser()
