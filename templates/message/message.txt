@@ -1,13 +1,9 @@
-Oi, {name}! Obrigado por aceitar o meu convite 😊
-Estou em busca de oportunidades remotas como Dev Java Full Stack — tenho 7 anos de experiência com Spring Boot e React/Angular em projetos críticos de fintech (Magalu, Cast Group) e fidelização (Vivo Valoriza), com forte uso de IA agêntica (Cursor/Claude Code) no dia a dia.
-Caso apareça alguma vaga alinhada a esse perfil, fico à disposição!
+Oi, {name}! Obrigado por aceitar a conexão 😊
 
-Abs,
-Lucas
----
-Oi, {name}, obrigado por conectar! 😊
-Sou Dev Java Full Stack com 7 anos de experiência em Spring Boot e React/Angular — de fintech (Magalu) a fidelização (Vivo Valoriza) — e trabalho com IA agêntica (Cursor/Claude Code) orientada a negócio.
-Busco oportunidade 100% remota. Se surgir algo no seu radar, adoraria conversar!
+Sou dev full stack com 7 anos de experiência, e o que mais me move é resolver problemas: já fui o responsável por destravar incidentes críticos em produção (bombeiro/firefighter), me adapto rápido a novos contextos e gosto de deixar o time mais forte com documentação clara e mentoria. 🧑‍🚒
 
-Abs,
-Lucas
+Atuo como full stack desde sempre (React/Angular com TypeScript no front), mas é no backend com Java + Spring Boot que eu mais gosto de trabalhar. ☕
+No dia a dia, uso IA agêntica (Claude Code/Cursor) de forma orientada a negócio para entregar mais rápido e com qualidade. 🤖📈
+
+Busco uma oportunidade 100% remota — se surgir algo alinhado a esse perfil, vou adorar conversar. 🏠🌎
+Deixo meu currículo aqui: https://github.com/lucasbc92/resume/raw/refs/heads/main/ptbr_resume.pdf

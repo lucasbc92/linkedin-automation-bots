@@ -1,0 +1,11 @@
+Oi, {name}! Faz um tempo que a gente não se fala, né? Espero que esteja tudo bem com você. 😊
+
+Entrei em contato contigo buscando novas oportunidades de emprego como Desenvolvedor Full Stack ou Back-end, e consegui ser realocado em agosto do ano passado. Hoje, resolvi sondar novamente o mercado, procurando uma oportunidade melhor!
+
+O que mais me move continua sendo resolver problemas — já fui o responsável por destravar incidentes críticos em produção (bombeiro/firefighter), me adapto rápido a novos contextos e gosto de deixar o time mais forte com documentação clara e mentoria. 🧑‍🚒
+
+Atuo como full stack desde sempre (React/Angular com TypeScript no front), mas é no backend com Java + Spring Boot que eu mais gosto de trabalhar. ☕
+No dia a dia, uso IA agêntica (Claude Code/Cursor) de forma orientada a negócio para entregar mais rápido e com qualidade. 🤖📈
+
+Estou de olho em uma oportunidade 100% remota — se você souber de algo alinhado a esse perfil, ou simplesmente quiser trocar uma ideia, vou adorar conversar. 🏠🌎
+Deixo meu currículo aqui: https://github.com/lucasbc92/resume/raw/refs/heads/main/ptbr_resume.pdf
