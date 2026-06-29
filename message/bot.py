@@ -109,7 +109,7 @@ def parse_card_timestamp(raw, today=None):
 
 
 class LinkedInMessageBot:
-    def __init__(self, message_file="message/templates/message.txt",
+    def __init__(self, message_file="templates/message/message.txt",
                  date_limit=None, dry_run=False, max_messages=None):
         """
         Args:

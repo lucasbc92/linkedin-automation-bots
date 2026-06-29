@@ -28,7 +28,7 @@ INVITE_ENDPOINT_FRAGMENTS = (
 
 class LinkedInConnectBot:
     def __init__(self, auto_continue=False,
-                 message_file="connect/templates/message.txt",
+                 message_file="templates/connect/message.txt",
                  reverse=False, no_message=False):
         self.auto_continue = auto_continue
         self.reverse = reverse
