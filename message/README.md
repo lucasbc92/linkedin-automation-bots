@@ -55,6 +55,13 @@ python main.py message -m reconnect.txt --max 5 --dry-run
   *above* the active one is skipped. This lets you resume from a known point or
   start partway down the inbox.
 
+Every contact a message is confirmed sent to is also recorded in
+`message/.sent_history.json` (gitignored). The conversation list re-sorts by
+recent activity — a reply, or any other conversation getting activity — so it
+isn't append-only between runs. This history is loaded on startup and merged
+into the skip set, so someone already messaged in an earlier run is never
+re-messaged even if they end up *below* wherever you click to resume.
+
 ## Date parsing
 
 The `--date-limit` check relies on parsing LinkedIn's conversation-card

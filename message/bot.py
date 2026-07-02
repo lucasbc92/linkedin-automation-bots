@@ -15,6 +15,7 @@ from common.browser import create_driver
 from common.messages import MessageTemplates
 from common.names import display_first_name
 from common.sleep import allow_sleep, prevent_sleep
+from message.history import load_sent_names, record_sent
 
 logger = logging.getLogger("linkedin_bot")
 
@@ -149,7 +150,7 @@ class LinkedInMessageBot:
                       "x": x, "y": y}
             self.driver.execute_cdp_cmd(
                 "Input.dispatchMouseEvent", {**params, "type": "mousePressed"})
-            time.sleep(0.05)
+            time.sleep(0.1)
             self.driver.execute_cdp_cmd(
                 "Input.dispatchMouseEvent", {**params, "type": "mouseReleased"})
             logger.debug(f"CDP click OK on {description} at ({x:.0f},{y:.0f})")
@@ -232,7 +233,7 @@ class LinkedInMessageBot:
         """Type text into the compose box and send it. Returns True on success."""
         try:
             self._insert_text(compose_box, text)
-            time.sleep(0.5)
+            time.sleep(0.8)
 
             # Verify the box has content
             if self._box_is_empty(compose_box):
@@ -241,7 +242,7 @@ class LinkedInMessageBot:
 
             # Primary send: trusted Enter key
             compose_box.send_keys(Keys.ENTER)
-            time.sleep(2)
+            time.sleep(3)
 
             # Verify sent: box should be empty / placeholder restored
             if self._box_is_empty(compose_box):
@@ -255,7 +256,7 @@ class LinkedInMessageBot:
                     "button.msg-form__send-button, "
                     "button[data-test-msg-send-btn]")
                 self._robust_click(send_btn, "Send button")
-                time.sleep(2)
+                time.sleep(3)
                 return self._box_is_empty(compose_box)
             except NoSuchElementException:
                 logger.warning(f"No Send button found for {contact_label}.")
@@ -332,26 +333,34 @@ class LinkedInMessageBot:
             container = self.driver.find_element(By.CSS_SELECTOR, _CONVERSATION_LIST)
             self.driver.execute_script(
                 "arguments[0].scrollTop = arguments[0].scrollHeight;", container)
-            time.sleep(1.5)
+            time.sleep(2)
         except Exception:
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1.5)
+            time.sleep(2)
 
     def _wait_thread_open(self, name_full, timeout=8):
-        """Wait until the active thread panel shows the contact's name."""
+        """Wait until the active thread panel shows the contact's name.
+
+        A header is only a match when it actually mentions the expected
+        first name. Treating "some header is visible" as a match (regardless
+        of whose name it shows) let the bot proceed while a *different*,
+        already-messaged contact's thread was still open — sending the next
+        message to the wrong person.
+        """
+        expected = name_full.split()[0].lower() if name_full else None
         end = time.time() + timeout
         while time.time() < end:
             try:
                 for sel in _THREAD_HEADER_NAME.split(","):
-                    els = self.driver.find_elements(By.CSS_SELECTOR, sel.strip())
-                    for el in els:
-                        if name_full and name_full.split()[0].lower() in el.text.lower():
-                            return True
-                        if el.is_displayed() and el.text.strip():
+                    for el in self.driver.find_elements(By.CSS_SELECTOR, sel.strip()):
+                        text = el.text.strip()
+                        if not text or not el.is_displayed():
+                            continue
+                        if expected is None or expected in text.lower():
                             return True
             except Exception:
                 pass
-            time.sleep(0.4)
+            time.sleep(0.8)
         return False
 
     def _get_compose_box(self, timeout=8):
@@ -365,7 +374,7 @@ class LinkedInMessageBot:
                         return el
                 except Exception:
                     continue
-            time.sleep(0.4)
+            time.sleep(0.8)
         return None
 
     def _build_skip_set(self):
@@ -418,6 +427,20 @@ class LinkedInMessageBot:
         self._select_messaging_tab()
 
         processed = self._build_skip_set()   # names already handled / to skip
+
+        # The conversation list re-sorts by recent activity and isn't
+        # append-only, so cards move around between runs (someone replies,
+        # an unrelated conversation gets activity, etc.). Relying only on
+        # "above the clicked card" can let an already-messaged contact land
+        # below the resume point in a later run. The persisted history is
+        # the durable record that prevents re-messaging them.
+        history = load_sent_names()
+        already_sent = history - processed
+        if already_sent:
+            logger.info(
+                f"{len(already_sent)} contact(s) from previous run(s) found "
+                f"below the resume point — skipping them too.")
+        processed |= history
 
         try:
             while True:
@@ -475,9 +498,9 @@ class LinkedInMessageBot:
                 try:
                     self.driver.execute_script(
                         "arguments[0].scrollIntoView({block: 'center'});", target)
-                    time.sleep(random.uniform(0.8, 1.5))
+                    time.sleep(random.uniform(1, 2))
                     self._robust_click(target, f"conversation card ({name_full})")
-                    time.sleep(2)
+                    time.sleep(3)
 
                     if not self._wait_thread_open(name_full):
                         logger.warning(f"Thread for {name_full} did not open. Skipping.")
@@ -490,12 +513,26 @@ class LinkedInMessageBot:
                         self.skipped += 1
                         continue
 
+                    # Re-confirm identity right before typing: the panel can
+                    # switch to a different (already-messaged) contact
+                    # between the click and now (list re-sort, LinkedIn's own
+                    # focus changes). Sending here would resend to that
+                    # earlier contact instead of name_full.
+                    if not self._wait_thread_open(name_full, timeout=1):
+                        logger.warning(
+                            f"Active thread switched away from {name_full} "
+                            f"just before sending. Skipping to avoid "
+                            f"messaging the wrong contact.")
+                        self.skipped += 1
+                        continue
+
                     logger.info(
                         f"Sending to {first or name_full}: "
                         f"{message.splitlines()[0] if message else ''}")
 
                     if self._send_message(compose, message, name_full):
                         self.sent += 1
+                        record_sent(name_full)
                         logger.info(
                             f"Message sent to {first or name_full} "
                             f"[sent={self.sent}, failed={self.failed}, "
@@ -507,7 +544,7 @@ class LinkedInMessageBot:
                             f"[sent={self.sent}, failed={self.failed}, "
                             f"skipped={self.skipped}]")
 
-                    time.sleep(random.uniform(3, 5))
+                    time.sleep(random.uniform(4, 6))
 
                     if self.max_messages and self.sent >= self.max_messages:
                         logger.info(f"Reached --max {self.max_messages}. Stopping.")

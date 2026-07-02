@@ -17,6 +17,7 @@ venv/
 
 # Bot runtime output
 last_run.log
+message/.sent_history.json
 
 # IDEs
 .idea/
