@@ -13,14 +13,22 @@ Starting from an open **Messaging** tab, the bot:
 1. Finds the messaging tab among your open Chrome tabs (falling back to the
    current tab).
 2. Determines where to start (see [Where it starts](#where-it-starts) below).
-3. Walks the conversation list top-to-bottom (newest-first). For each card it:
+3. Walks the conversation list **strictly downward, one card at a time** — the
+   next contact is always the card right after the current one, never a rescan
+   from the top. For each card it:
    - skips **Sponsored**, **InMail**, and **LinkedIn Offer** cards (identified
      by their pill label);
+   - skips anyone already recorded in the send history;
    - optionally stops once a conversation is older than `--date-limit`;
    - opens the thread, types a personalized message into the compose box, and
      sends it.
-4. Lazy-loads more conversations by scrolling until it reaches the bottom of the
-   list (or hits `--max`).
+4. Lazy-loads more conversations (by focusing the last card) until it reaches
+   the bottom of the list (or hits `--max`).
+
+Sending a message makes that conversation jump to the top of the list, so the
+bot captures the *next* card **before** sending. That is what keeps the walk
+anchored: nothing after the send is ever computed relative to the top of the
+list, so already-messaged contacts up there can never become targets again.
 
 The message text comes from a template in [`templates/message/`](../templates/message/).
 `{name}` is replaced with the contact's first name. Unlike the connect bot,
@@ -34,6 +42,7 @@ python main.py message                        # default template, whole inbox
 python main.py message --dry-run              # preview who/what — sends nothing
 python main.py message --max 10               # stop after 10 messages
 python main.py message --date-limit 2025/12/31  # stop at conversations older than this
+python main.py message --start-date 2025/07/30  # scroll down to this date and start there
 python main.py message -m reconnect.txt --max 5 --dry-run
 ```
 
@@ -43,6 +52,7 @@ python main.py message -m reconnect.txt --max 5 --dry-run
 |------|---------|---------|
 | `-m`, `--message FILE` | `message.txt` | Template file in `templates/message/`. A bare filename is resolved against that folder; a path is used as-is. |
 | `--date-limit YYYY/MM/DD` | none | Stop when a conversation is older than this date. Because the list is newest-first, the first too-old card halts the whole run. |
+| `--start-date YYYY/MM/DD` | none | Scroll down the list (lazy-loading as needed), click the **first conversation dated on or before** this date, and start sending from there, inclusive. If no such conversation exists, the run ends without sending. |
 | `--dry-run` | off | Log who would be messaged and the first line of the text, without opening threads or sending anything. |
 | `--max N` | unlimited | Stop after sending `N` messages (a blast-radius cap). |
 | `-l`, `--log-level` | `DEBUG` | `DEBUG`, `INFO`, `WARN`, or `ERROR`. |
@@ -54,18 +64,23 @@ python main.py message -m reconnect.txt --max 5 --dry-run
   **from that conversation, inclusive**, and continues downward. Every card
   *above* the active one is skipped. This lets you resume from a known point or
   start partway down the inbox.
+- **`--start-date` given** → the bot scrolls the list itself (focusing the last
+  card to trigger lazy-loading, since plain scrolling doesn't reliably load
+  more) until it finds the first conversation dated on or before that date,
+  clicks it, and starts from there — same as if you had clicked it manually.
 
 Every contact a message is confirmed sent to is also recorded in
 `message/.sent_history.json` (gitignored). The conversation list re-sorts by
 recent activity — a reply, or any other conversation getting activity — so it
-isn't append-only between runs. This history is loaded on startup and merged
-into the skip set, so someone already messaged in an earlier run is never
-re-messaged even if they end up *below* wherever you click to resume.
+isn't append-only between runs. The history is loaded on startup and used as a
+skip check while walking, so someone already messaged in an earlier run is
+never re-messaged even if they end up *below* wherever you resume. It is only
+ever used to *skip* a card — navigation itself is purely "the next card down".
 
 ## Date parsing
 
-The `--date-limit` check relies on parsing LinkedIn's conversation-card
-timestamps, which come in several formats. `parse_card_timestamp()` in
+The `--date-limit` and `--start-date` checks rely on parsing LinkedIn's
+conversation-card timestamps, which come in several formats. `parse_card_timestamp()` in
 [`message/bot.py`](bot.py) handles:
 
 | Card shows | Interpreted as |

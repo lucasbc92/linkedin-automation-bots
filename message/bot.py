@@ -111,18 +111,38 @@ def parse_card_timestamp(raw, today=None):
     return None
 
 
+def first_card_on_or_before(timestamps, target, today=None):
+    """Index of the first card whose date is on or before ``target``.
+
+    ``timestamps`` is an iterable of ``(card_index, raw_text)`` pairs in list
+    order (newest first). Returns ``None`` when every parsable date is still
+    newer than ``target``.
+    """
+    for idx, raw in timestamps:
+        card_date = parse_card_timestamp(raw, today=today)
+        if card_date and card_date <= target:
+            return idx
+    return None
+
+
 class LinkedInMessageBot:
     def __init__(self, message_file="templates/message/message.txt",
-                 date_limit=None, dry_run=False, max_messages=None):
+                 date_limit=None, start_date=None, dry_run=False,
+                 max_messages=None):
         """
         Args:
             message_file: Path to the template file.
             date_limit: ``date`` object; stop when a card is older than this.
                         ``None`` → process the whole list.
+            start_date: ``date`` object; scroll down the list until the first
+                        conversation dated on or before this, click it, and
+                        start sending from there. ``None`` → start from the
+                        top or from the card the user clicked manually.
             dry_run: If True, log what would be sent without typing or sending.
             max_messages: Stop after this many messages sent. ``None`` = unlimited.
         """
         self.date_limit = date_limit
+        self.start_date = start_date
         self.dry_run = dry_run
         self.max_messages = max_messages
 
@@ -338,6 +358,89 @@ class LinkedInMessageBot:
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
 
+    def _visible_card_timestamps(self):
+        """Return ``[(index, raw timestamp), …]`` for every card that has a
+        rendered ``<time>`` element, in list order.
+
+        Done in one JS round-trip: with hundreds of cards loaded, probing each
+        ``<li>`` through Selenium takes seconds per pass. Occluded
+        (virtualized) cards have their content emptied by LinkedIn and simply
+        don't appear in the result.
+        """
+        try:
+            return self.driver.execute_script(
+                "const out = [];"
+                "document.querySelectorAll(arguments[0]).forEach((li, i) => {"
+                "  const t = li.querySelector(arguments[1]);"
+                "  if (t && t.textContent.trim()) out.push([i, t.textContent.trim()]);"
+                "});"
+                "return out;",
+                _CARD_ITEM, _TIME_SELECTOR) or []
+        except Exception as e:
+            logger.debug(f"Could not collect card timestamps: {e}")
+            return []
+
+    def _focus_last_card(self):
+        """Focus the second-to-last card to make the list lazy-load more.
+
+        Same technique as focusLastElementLinkedinMessage.js: setting
+        ``scrollTop`` alone doesn't reliably make the virtualized list fetch
+        the next page, but moving focus to the last card does.
+        """
+        try:
+            self.driver.execute_script(
+                "const items = document.querySelectorAll(arguments[0]);"
+                "const el = items[items.length - 2] || items[items.length - 1];"
+                "if (el) el.focus();",
+                _CARD_ITEM)
+        except Exception:
+            self._scroll_list_bottom()
+
+    def _scroll_to_start_date(self, target):
+        """Scroll until a conversation dated on or before ``target`` appears,
+        then click it so the run starts from that card (inclusive).
+
+        Returns True once the start card was clicked, False if the bottom of
+        the list was reached without finding one.
+        """
+        logger.info(
+            f"Looking for the first conversation dated on or before {target} …")
+        while True:
+            idx = first_card_on_or_before(self._visible_card_timestamps(), target)
+            if idx is not None:
+                cards = self._get_cards()
+                if idx >= len(cards):
+                    # List changed between the JS scan and now; rescan.
+                    time.sleep(1)
+                    continue
+                card = cards[idx]
+                name = self._card_name(card)
+                ts = self._card_timestamp(card)
+                logger.info(
+                    f"Start card found at index {idx}: "
+                    f"{name or '(unknown)'} — dated '{ts}'. Clicking it.")
+                try:
+                    self.driver.execute_script(
+                        "arguments[0].scrollIntoView({block: 'center'});", card)
+                except Exception:
+                    pass
+                time.sleep(1)
+                self._robust_click(card, f"start card ({name or ts})")
+                time.sleep(3)
+                return True
+
+            count_before = len(self._get_cards())
+            logger.debug(
+                f"No card on or before {target} among {count_before} loaded; "
+                f"focusing the last card to load more …")
+            self._focus_last_card()
+            time.sleep(3)
+            if len(self._get_cards()) <= count_before:
+                logger.warning(
+                    f"Reached the bottom of the list without finding a "
+                    f"conversation dated on or before {target}.")
+                return False
+
     def _wait_thread_open(self, name_full, timeout=8):
         """Wait until the active thread panel shows the contact's name.
 
@@ -377,182 +480,246 @@ class LinkedInMessageBot:
             time.sleep(0.8)
         return None
 
-    def _build_skip_set(self):
-        """Return names to skip based on the currently active (clicked) card.
-
-        If a conversation is already open when the bot starts, only the cards
-        *above* that card are added to the skip set. The active card itself is
-        left out so the bot begins processing *from* the clicked contact
-        (inclusive) and continues downward.
-
-        If no card is active, returns an empty set (process from the top).
-        """
-        skipped = set()
+    def _active_card(self):
+        """Return the <li> of the currently active conversation, or None."""
         try:
-            cards = self._get_cards()
-            for card in cards:
-                # Stop as soon as we hit the active card — it is the contact
-                # the user clicked, so it should be processed, not skipped.
-                try:
-                    active = card.find_elements(
-                        By.CSS_SELECTOR,
-                        ".msg-conversations-container__convo-item-link--active")
-                    if active:
-                        break
-                except Exception:
-                    pass
-                name = self._card_name(card)
-                if name:
-                    skipped.add(name)
-            else:
-                # Loop completed without finding an active card → start from top
-                return set()
+            return self.driver.execute_script(
+                "const a = document.querySelector("
+                "  '.msg-conversations-container__convo-item-link--active');"
+                "return a ? a.closest(arguments[0]) : null;",
+                _CARD_ITEM)
         except Exception as e:
-            logger.debug(f"Could not determine starting position: {e}")
-            return set()
+            logger.debug(f"Could not find the active card: {e}")
+            return None
 
-        if skipped:
-            logger.info(
-                f"Starting from the active (clicked) card — "
-                f"skipping {len(skipped)} conversation(s) above it.")
-        return skipped
+    def _next_card(self, card):
+        """Return the conversation <li> right after ``card`` in the list,
+        lazy-loading one more page if ``card`` is currently the last one.
+        Returns None only when the true bottom of the list was reached.
+        """
+        for attempt in (1, 2):
+            try:
+                nxt = self.driver.execute_script(
+                    "let el = arguments[0].nextElementSibling;"
+                    "while (el && !el.matches(arguments[1]))"
+                    "  el = el.nextElementSibling;"
+                    "return el;",
+                    card, _CARD_ITEM)
+            except Exception as e:
+                logger.debug(f"Could not get the next card: {e}")
+                return None
+            if nxt is not None:
+                return nxt
+            if attempt == 1:
+                logger.debug("At the last loaded card; focusing it to load more …")
+                self._focus_last_card()
+                time.sleep(3)
+        return None
+
+    def _ensure_rendered(self, card, tries=3):
+        """Return the card's name, scrolling it into view first if LinkedIn's
+        virtualization has emptied it (occluded cards have no content until
+        they get near the viewport)."""
+        for _ in range(tries):
+            name = self._card_name(card)
+            if name:
+                return name
+            try:
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({block: 'center'});", card)
+            except Exception:
+                return None
+            time.sleep(1)
+        return self._card_name(card)
+
+    def _card_by_name(self, name):
+        """Find a conversation card by its participant name, or None."""
+        for card in self._get_cards():
+            if self._card_name(card) == name:
+                return card
+        return None
+
+    def _refresh_card(self, card, name):
+        """Return a usable element for a previously captured card.
+
+        The list re-sorts after every send; if LinkedIn re-created the DOM
+        node in the process, the captured reference goes stale and the card
+        is re-found by name instead.
+        """
+        if card is None:
+            return None
+        try:
+            card.is_displayed()   # probe: raises if the node went stale
+            return card
+        except Exception:
+            logger.debug(f"Captured card for {name!r} went stale; re-finding by name.")
+        if name:
+            return self._card_by_name(name)
+        return None
 
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
+    def _send_to_card(self, card, name_full, message):
+        """Open the thread for ``card`` and send ``message``. Updates the
+        sent/failed/skipped counters."""
+        first = display_first_name(name_full)
+        logger.info(f"Opening thread with {name_full} …")
+        try:
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'});", card)
+            time.sleep(random.uniform(1, 2))
+            self._robust_click(card, f"conversation card ({name_full})")
+            time.sleep(3)
+
+            if not self._wait_thread_open(name_full):
+                logger.warning(f"Thread for {name_full} did not open. Skipping.")
+                self.skipped += 1
+                return
+
+            compose = self._get_compose_box()
+            if compose is None:
+                logger.warning(f"No compose box found for {name_full}. Skipping.")
+                self.skipped += 1
+                return
+
+            # Re-confirm identity right before typing: the panel can switch
+            # to a different (already-messaged) contact between the click and
+            # now (list re-sort, LinkedIn's own focus changes). Sending here
+            # would resend to that earlier contact instead of name_full.
+            if not self._wait_thread_open(name_full, timeout=1):
+                logger.warning(
+                    f"Active thread switched away from {name_full} "
+                    f"just before sending. Skipping to avoid "
+                    f"messaging the wrong contact.")
+                self.skipped += 1
+                return
+
+            logger.info(
+                f"Sending to {first or name_full}: "
+                f"{message.splitlines()[0] if message else ''}")
+
+            if self._send_message(compose, message, name_full):
+                self.sent += 1
+                record_sent(name_full)
+                logger.info(
+                    f"Message sent to {first or name_full} "
+                    f"[sent={self.sent}, failed={self.failed}, "
+                    f"skipped={self.skipped}]")
+            else:
+                self.failed += 1
+                logger.warning(
+                    f"Message to {name_full} did not register "
+                    f"[sent={self.sent}, failed={self.failed}, "
+                    f"skipped={self.skipped}]")
+
+            time.sleep(random.uniform(4, 6))
+
+        except Exception as e:
+            logger.error(f"Error processing {name_full}: {e}")
+            self.failed += 1
+
     def run(self):
-        """Walk the conversation list and send personalized messages."""
+        """Walk the conversation list strictly downward, one card at a time.
+
+        The next contact is ALWAYS the card right after the current one —
+        never a rescan of the list from the top. The list re-sorts the moment
+        a message is sent (the messaged contact jumps to the top), so the
+        next card is captured *before* sending; anything computed after the
+        send would be relative to the top of the list and restart the walk
+        among already-messaged contacts.
+        """
         prevent_sleep()
         self._select_messaging_tab()
 
-        processed = self._build_skip_set()   # names already handled / to skip
-
-        # The conversation list re-sorts by recent activity and isn't
-        # append-only, so cards move around between runs (someone replies,
-        # an unrelated conversation gets activity, etc.). Relying only on
-        # "above the clicked card" can let an already-messaged contact land
-        # below the resume point in a later run. The persisted history is
-        # the durable record that prevents re-messaging them.
-        history = load_sent_names()
-        already_sent = history - processed
-        if already_sent:
-            logger.info(
-                f"{len(already_sent)} contact(s) from previous run(s) found "
-                f"below the resume point — skipping them too.")
-        processed |= history
-
         try:
-            while True:
+            if self.start_date:
+                if not self._scroll_to_start_date(self.start_date):
+                    logger.error(
+                        f"No conversation dated on or before "
+                        f"{self.start_date} was found. Nothing to do.")
+                    return
+
+            # Durable record of everyone already messaged in past runs; used
+            # only to decide whether to skip a card, never to navigate.
+            history = load_sent_names()
+            handled = set()   # names walked past in this run
+
+            current = self._active_card()
+            if current is not None:
+                logger.info(
+                    "Starting from the active (clicked) conversation, "
+                    "walking down.")
+            else:
                 cards = self._get_cards()
+                current = cards[0] if cards else None
+                logger.info("No active conversation — starting from the top.")
 
-                # Find the topmost unprocessed, non-Sponsored card
-                target = None
-                for card in cards:
-                    name_full = self._card_name(card)
-                    if not name_full or name_full in processed:
-                        continue
-                    pill = self._card_skip_pill(card)
-                    if pill:
-                        processed.add(name_full)
-                        logger.debug(f"Skipping {pill}: {name_full}")
-                        continue
-                    target = card
-                    break
-
-                if target is None:
-                    # Try to lazy-load more
-                    count_before = len(cards)
-                    self._scroll_list_bottom()
-                    count_after = len(self._get_cards())
-                    if count_after <= count_before:
-                        logger.info("Reached the bottom of the conversation list.")
-                        break
-                    continue
-
-                name_full = self._card_name(target)
-                first = display_first_name(name_full) if name_full else None
+            while current is not None:
+                name_full = self._ensure_rendered(current)
 
                 # --- date-limit check ---
-                ts_raw = self._card_timestamp(target)
-                if ts_raw:
-                    card_date = parse_card_timestamp(ts_raw)
-                    if self.date_limit and card_date and card_date < self.date_limit:
-                        logger.info(
-                            f"Card for {name_full} dated {card_date} is before "
-                            f"date limit {self.date_limit}. Stopping.")
-                        break
+                ts_raw = self._card_timestamp(current)
+                card_date = parse_card_timestamp(ts_raw) if ts_raw else None
+                if self.date_limit and card_date and card_date < self.date_limit:
+                    logger.info(
+                        f"Card for {name_full or '(unknown)'} dated {card_date} "
+                        f"is before date limit {self.date_limit}. Stopping.")
+                    break
 
-                processed.add(name_full)
+                # --- decide whether this card gets a message ---
+                skip_reason = None
+                if not name_full:
+                    skip_reason = "card has no readable name"
+                else:
+                    pill = self._card_skip_pill(current)
+                    if pill:
+                        skip_reason = pill
+                    elif name_full in handled:
+                        skip_reason = "already handled in this run"
+                    elif name_full in history:
+                        skip_reason = "already messaged in a previous run"
 
-                message = self._msg.personalize(first)
+                if skip_reason:
+                    logger.info(
+                        f"Skipping {name_full or '(unnamed card)'} — {skip_reason}.")
+                    if name_full:
+                        handled.add(name_full)
+                    current = self._next_card(current)
+                    continue
+
+                handled.add(name_full)
+                message = self._msg.personalize(display_first_name(name_full))
 
                 if self.dry_run:
                     first_line = message.splitlines()[0] if message else ""
-                    logger.info(
-                        f"[DRY-RUN] Would send to {first or name_full}: "
-                        f"{first_line}")
+                    logger.info(f"[DRY-RUN] Would send to {name_full}: {first_line}")
+                    current = self._next_card(current)
                     continue
 
-                logger.info(f"Opening thread with {name_full} …")
-                try:
-                    self.driver.execute_script(
-                        "arguments[0].scrollIntoView({block: 'center'});", target)
-                    time.sleep(random.uniform(1, 2))
-                    self._robust_click(target, f"conversation card ({name_full})")
-                    time.sleep(3)
+                # Capture the next card BEFORE sending — sending moves the
+                # current card to the top of the list.
+                next_card = self._next_card(current)
+                next_name = (self._ensure_rendered(next_card)
+                             if next_card is not None else None)
 
-                    if not self._wait_thread_open(name_full):
-                        logger.warning(f"Thread for {name_full} did not open. Skipping.")
-                        self.skipped += 1
-                        continue
+                self._send_to_card(current, name_full, message)
 
-                    compose = self._get_compose_box()
-                    if compose is None:
-                        logger.warning(f"No compose box found for {name_full}. Skipping.")
-                        self.skipped += 1
-                        continue
+                if self.max_messages and self.sent >= self.max_messages:
+                    logger.info(f"Reached --max {self.max_messages}. Stopping.")
+                    break
 
-                    # Re-confirm identity right before typing: the panel can
-                    # switch to a different (already-messaged) contact
-                    # between the click and now (list re-sort, LinkedIn's own
-                    # focus changes). Sending here would resend to that
-                    # earlier contact instead of name_full.
-                    if not self._wait_thread_open(name_full, timeout=1):
-                        logger.warning(
-                            f"Active thread switched away from {name_full} "
-                            f"just before sending. Skipping to avoid "
-                            f"messaging the wrong contact.")
-                        self.skipped += 1
-                        continue
-
-                    logger.info(
-                        f"Sending to {first or name_full}: "
-                        f"{message.splitlines()[0] if message else ''}")
-
-                    if self._send_message(compose, message, name_full):
-                        self.sent += 1
-                        record_sent(name_full)
-                        logger.info(
-                            f"Message sent to {first or name_full} "
-                            f"[sent={self.sent}, failed={self.failed}, "
-                            f"skipped={self.skipped}]")
-                    else:
-                        self.failed += 1
-                        logger.warning(
-                            f"Message to {name_full} did not register "
-                            f"[sent={self.sent}, failed={self.failed}, "
-                            f"skipped={self.skipped}]")
-
-                    time.sleep(random.uniform(4, 6))
-
-                    if self.max_messages and self.sent >= self.max_messages:
-                        logger.info(f"Reached --max {self.max_messages}. Stopping.")
-                        break
-
-                except Exception as e:
-                    logger.error(f"Error processing {name_full}: {e}")
-                    self.failed += 1
+                current = self._refresh_card(next_card, next_name)
+                if current is None and next_card is not None:
+                    logger.warning(
+                        f"Lost track of the next card "
+                        f"({next_name or 'unnamed'}) after the list "
+                        f"re-sorted. Stopping instead of re-walking from "
+                        f"the top.")
+                    break
+            else:
+                logger.info("Reached the bottom of the conversation list.")
 
         finally:
             allow_sleep()

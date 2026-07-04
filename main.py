@@ -94,6 +94,7 @@ examples:
   python main.py message --dry-run
   python main.py message --max 10
   python main.py message --date-limit 2025/12/31
+  python main.py message --start-date 2025/07/30
   python main.py message -m message_v2.txt --max 5 --dry-run
 
 templates live in:  templates/message/
@@ -155,6 +156,10 @@ def build_parser():
         help="Stop when a conversation is older than this date "
              "(the list is newest-first, so this halts the whole run)")
     mp.add_argument(
+        "--start-date", metavar="YYYY/MM/DD",
+        help="Scroll down the list, click the first conversation dated on or "
+             "before this date, and start sending from there (inclusive)")
+    mp.add_argument(
         "--dry-run", action="store_true",
         help="Preview who would be messaged and with what text — nothing is sent")
     mp.add_argument(
@@ -210,19 +215,24 @@ def run_message(args):
 
     message_file = _resolve_template(args.message, "message")
 
-    date_limit = None
-    if args.date_limit:
+    def parse_cli_date(value, flag):
+        if not value:
+            return None
         try:
-            parts = args.date_limit.replace("-", "/").split("/")
-            date_limit = date(int(parts[0]), int(parts[1]), int(parts[2]))
+            parts = value.replace("-", "/").split("/")
+            return date(int(parts[0]), int(parts[1]), int(parts[2]))
         except Exception:
-            logger.error(f"Invalid --date-limit '{args.date_limit}'. Use YYYY/MM/DD.")
+            logger.error(f"Invalid {flag} '{value}'. Use YYYY/MM/DD.")
             sys.exit(1)
+
+    date_limit = parse_cli_date(args.date_limit, "--date-limit")
+    start_date = parse_cli_date(args.start_date, "--start-date")
 
     logger.info("=" * 60)
     logger.info("LinkedIn Message Bot")
     logger.info(f"  Message    : {message_file}")
     logger.info(f"  Date limit : {date_limit or 'none (full list)'}")
+    logger.info(f"  Start date : {start_date or 'none (top or clicked card)'}")
     logger.info(f"  Dry run    : {'yes' if args.dry_run else 'no'}")
     logger.info(f"  Max msgs   : {args.max_messages or 'unlimited'}")
     logger.info(f"  Log level  : {args.log_level}")
@@ -232,6 +242,7 @@ def run_message(args):
     bot = LinkedInMessageBot(
         message_file=message_file,
         date_limit=date_limit,
+        start_date=start_date,
         dry_run=args.dry_run,
         max_messages=args.max_messages,
     )
