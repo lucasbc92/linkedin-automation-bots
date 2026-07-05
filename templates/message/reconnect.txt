@@ -1,13 +1,16 @@
-Oi, {name}! Faz um tempo que a gente não se fala, né? Espero que esteja tudo bem com você. 😊
+Oi, {name}! Quanto tempo, hein? Espero que esteja tudo bem por aí. 😊
 
-Entrei em contato contigo buscando novas oportunidades de emprego como Desenvolvedor Full Stack ou Back-end faz um bom tempo, e consegui ser realocado em agosto do ano passado. Hoje, resolvi sondar novamente o mercado, procurando uma oportunidade melhor!
+Da última vez que conversamos, eu estava em busca de recolocação — e deu certo: desde agosto do ano passado estou de volta ao mercado e hoje atuo como Desenvolvedor Java Full Stack no programa de benefícios da Vivo. Agora estou sondando o mercado com calma, em busca de uma oportunidade 100% remota que seja um passo acima. 🏠
 
-O que mais me move continua sendo resolver problemas — já fui o responsável por destravar incidentes críticos em produção (bombeiro/firefighter), me adapto rápido a novos contextos e gosto de deixar o time mais forte com documentação clara e mentoria. 🧑‍🚒
+Um resumo rápido do meu perfil:
+• 6,5 anos de experiência full stack — back-end com Java + Spring Boot (onde mais gosto de atuar) e front-end com React/Angular em TypeScript;
+• microsserviços de alto volume em produção (milhões de transações diárias no Magalu) e histórico de "bombeiro", destravando incidentes críticos; 🧑‍🚒🔥
+• desenvolvimento assistido por IA (Claude Code, Cursor) com Spec Driven Development, entregando mais rápido e com mais qualidade.
 
-Atuo como full stack desde sempre (React/Angular com TypeScript no front), mas é no backend com Java + Spring Boot que eu mais gosto de trabalhar. ☕
-No dia a dia, uso IA agêntica (Claude Code/Cursor) de forma orientada a negócio para entregar mais rápido e com qualidade. 🤖📈
+Se souber de alguma vaga remota alinhada a esse perfil — ou puder me indicar para alguém do seu time — fico muito agradecido. E se quiser só trocar uma ideia, melhor ainda!
 
-Estou de olho em uma oportunidade 100% remota — se você souber de algo alinhado a esse perfil, ou simplesmente quiser trocar uma ideia, vou adorar conversar. 🏠🌎
+📄 Currículo: https://github.com/lucasbc92/resume/raw/refs/heads/main/linkedin_ptbr_resume.pdf
+📱 WhatsApp: https://wa.me/+5548991224064
 
-Deixo meu currículo aqui: https://github.com/lucasbc92/resume/raw/refs/heads/main/linkedin_ptbr_resume.pdf
-Link direto para o WhatsApp: https://wa.me/+5548991224064
+Um abraço,
+Lucas
