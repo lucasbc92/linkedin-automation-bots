@@ -35,6 +35,7 @@ python main.py connect -m message_formal.txt # pick a specific template
 python main.py connect -n                    # send invitations with no note
 python main.py connect -y -l INFO            # auto-continue past the warning, quieter
 python main.py connect -r                    # page backwards (Previous instead of Next)
+python main.py connect --max 80              # stop after 80 invitations sent
 ```
 
 ### Options
@@ -45,6 +46,7 @@ python main.py connect -r                    # page backwards (Previous instead 
 | `-n`, `--no-message` | off | Send invitations **without** a note (clicks "Send without a note"). |
 | `-r`, `--reverse` | off | Navigate results in reverse (click **Previous** instead of **Next**). |
 | `-y`, `--yes` | off | Auto-continue past the "close to the weekly invitation limit" warning instead of prompting. |
+| `--max N` | unlimited | Stop after sending `N` invitations (blast-radius limit, independent of LinkedIn's own weekly cap). |
 | `-l`, `--log-level` | `DEBUG` | `DEBUG`, `INFO`, `WARN`, or `ERROR`. |
 
 ## Connection-request limits

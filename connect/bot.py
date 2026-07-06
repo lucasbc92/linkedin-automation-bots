@@ -29,10 +29,11 @@ INVITE_ENDPOINT_FRAGMENTS = (
 class LinkedInConnectBot:
     def __init__(self, auto_continue=False,
                  message_file="templates/connect/message.txt",
-                 reverse=False, no_message=False):
+                 reverse=False, no_message=False, max_invites=None):
         self.auto_continue = auto_continue
         self.reverse = reverse
         self.no_message = no_message
+        self.max_invites = max_invites
 
         self.driver, self.perf_logging = create_driver(attach_to_existing=True)
 
@@ -680,6 +681,10 @@ class LinkedInConnectBot:
                         f"[sent={self.connections_sent}, "
                         f"failed={self.connections_failed}, "
                         f"skipped={self.connections_skipped}]")
+
+                    if self.max_invites and self.connections_sent >= self.max_invites:
+                        logger.info(f"Reached --max {self.max_invites}. Stopping.")
+                        return False
                 else:
                     if not self.check_invitation_limit_warning():
                         return False

@@ -84,6 +84,7 @@ examples:
   python main.py connect -n                         # no note
   python main.py connect -y -l INFO                 # auto-continue, less verbose
   python main.py connect -r                         # navigate in reverse (Previous)
+  python main.py connect --max 80                   # stop after 80 invitations sent
 
 templates live in:  templates/connect/
 """
@@ -132,6 +133,9 @@ def build_parser():
     cp.add_argument(
         "-n", "--no-message", action="store_true",
         help="Send invitations without an accompanying note")
+    cp.add_argument(
+        "--max", dest="max_invites", type=int, metavar="N",
+        help="Stop after sending N invitations (blast-radius limit)")
     cp.add_argument(
         "-l", "--log-level", default="DEBUG",
         choices=["DEBUG", "INFO", "WARN", "ERROR"],
@@ -191,6 +195,7 @@ def run_connect(args):
         logger.info(f"  Message    : {message_file}")
     logger.info(f"  Navigation : {'reverse (Previous)' if args.reverse else 'forward (Next)'}")
     logger.info(f"  Auto-cont  : {'on (-y)' if args.yes else 'off'}")
+    logger.info(f"  Max invites: {args.max_invites or 'unlimited'}")
     logger.info(f"  Log level  : {args.log_level}")
     logger.info("=" * 60)
 
@@ -200,6 +205,7 @@ def run_connect(args):
         message_file=message_file,
         reverse=args.reverse,
         no_message=args.no_message,
+        max_invites=args.max_invites,
     )
     try:
         bot.run_automation(max_pages=100)
