@@ -1,6 +1,0 @@
-Oi, {name}!
-Dev Java Full Stack há 7 anos (Spring Boot, React/Angular): microsserviços financeiros na Magalu — milhões de transações/dia — e o Vivo Valoriza. Desenvolvo com agentes de IA via Spec Driven Development.
-Busco vaga remota. Vamos conectar? 😊
-
-[]'s,
-Lucas

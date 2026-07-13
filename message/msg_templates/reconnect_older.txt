@@ -1,0 +1,20 @@
+Oi, {name}! Quanto tempo, hein? 😊
+Lembrei de você. Espero que esteja tudo bem por aí. 
+
+Estou sondando o mercado com calma, em busca de uma oportunidade 100% remota 🏠
+
+Um resumo rápido do meu perfil:
+• 6,5 anos de experiência full stack — back-end com Java + Spring Boot (onde mais gosto de atuar) e front-end com React/Angular em TypeScript;
+• microsserviços de alto volume em produção (milhões de transações diárias no Magalu) e histórico de "bombeiro", destravando incidentes críticos; 🧑‍🚒🔥
+• desenvolvimento assistido por agentes de IA (Claude Code, Cursor) com Spec Driven Development, entregando mais rápido e com mais qualidade.
+
+Se souber de alguma vaga remota alinhada a esse perfil — ou puder me indicar para alguém do seu time — fico muito agradecido. E se quiser só trocar uma ideia, melhor ainda!
+
+📄 Currículo:
+Site: https://lucasbc92.github.io/resume
+PDF: https://github.com/lucasbc92/resume/raw/refs/heads/main/linkedin_ptbr_resume.pdf
+
+📱 WhatsApp: https://wa.me/+5548991224064
+
+Um abraço,
+Lucas

@@ -38,7 +38,8 @@ from argcomplete.completers import BaseCompleter
 
 from common.logging_setup import setup_logging
 
-_TEMPLATE_ROOT = "templates"
+def _template_root(bot):
+    return os.path.join(bot, "msg_templates")
 
 
 # ---------------------------------------------------------------------------
@@ -46,13 +47,13 @@ _TEMPLATE_ROOT = "templates"
 # ---------------------------------------------------------------------------
 
 class _TemplateCompleter(BaseCompleter):
-    """Complete filenames from templates/<bot>/ for the -m flag."""
+    """Complete filenames from <bot>/msg_templates/ for the -m flag."""
 
     def __init__(self, bot):
         self._bot = bot
 
     def __call__(self, prefix, **kwargs):
-        folder = Path(_TEMPLATE_ROOT) / self._bot
+        folder = Path(_template_root(self._bot))
         try:
             return [
                 p.name for p in folder.iterdir()
@@ -67,10 +68,10 @@ class _TemplateCompleter(BaseCompleter):
 # ---------------------------------------------------------------------------
 
 def _resolve_template(filename, bot):
-    """Prepend templates/<bot>/ unless the user already gave a path."""
+    """Prepend <bot>/msg_templates/ unless the user already gave a path."""
     if os.sep in filename or "/" in filename:
         return filename
-    return os.path.join(_TEMPLATE_ROOT, bot, filename)
+    return os.path.join(_template_root(bot), filename)
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +87,7 @@ examples:
   python main.py connect -r                         # navigate in reverse (Previous)
   python main.py connect --max 80                   # stop after 80 invitations sent
 
-templates live in:  templates/connect/
+templates live in:  connect/msg_templates/
 """
 
 _MESSAGE_EPILOG = """
@@ -97,8 +98,11 @@ examples:
   python main.py message --date-limit 2025/12/31
   python main.py message --start-date 2025/07/30
   python main.py message -m message_v2.txt --max 5 --dry-run
+  python main.py message -i -m reconnect_older.txt --date-limit 2024/10/20
+      # click an old conversation first, then walk upward (older→newer),
+      # stopping once a conversation is newer than the date limit
 
-templates live in:  templates/message/
+templates live in:  message/msg_templates/
 """
 
 
@@ -125,7 +129,7 @@ def build_parser():
         help="Auto-continue past the weekly close-to-limit warning")
     m_connect = cp.add_argument(
         "-m", "--message", default="message.txt", metavar="FILE",
-        help="Template file in templates/connect/  (default: message.txt)")
+        help="Template file in connect/msg_templates/  (default: message.txt)")
     m_connect.completer = _TemplateCompleter("connect")
     cp.add_argument(
         "-r", "--reverse", action="store_true",
@@ -153,7 +157,7 @@ def build_parser():
     )
     m_message = mp.add_argument(
         "-m", "--message", default="message.txt", metavar="FILE",
-        help="Template file in templates/message/  (default: message.txt)")
+        help="Template file in message/msg_templates/  (default: message.txt)")
     m_message.completer = _TemplateCompleter("message")
     mp.add_argument(
         "--date-limit", metavar="YYYY/MM/DD",
@@ -163,6 +167,10 @@ def build_parser():
         "--start-date", metavar="YYYY/MM/DD",
         help="Scroll down the list, click the first conversation dated on or "
              "before this date, and start sending from there (inclusive)")
+    mp.add_argument(
+        "-i", "--inv", action="store_true",
+        help="Walk the list upward (older→newer) instead of downward. "
+             "Flips --date-limit to mean 'stop once newer than this date'")
     mp.add_argument(
         "--dry-run", action="store_true",
         help="Preview who would be messaged and with what text — nothing is sent")
@@ -184,7 +192,7 @@ def build_parser():
 
 def run_connect(args):
     level_name = "WARNING" if args.log_level == "WARN" else args.log_level
-    logger = setup_logging(level=getattr(logging, level_name, logging.DEBUG))
+    logger = setup_logging(level=getattr(logging, level_name, logging.DEBUG), log_dir="connect/logs")
 
     message_file = _resolve_template(args.message, "connect")
 
@@ -217,7 +225,7 @@ def run_connect(args):
 
 def run_message(args):
     level_name = "WARNING" if args.log_level == "WARN" else args.log_level
-    logger = setup_logging(level=getattr(logging, level_name, logging.DEBUG))
+    logger = setup_logging(level=getattr(logging, level_name, logging.DEBUG), log_dir="message/logs")
 
     message_file = _resolve_template(args.message, "message")
 
@@ -237,6 +245,7 @@ def run_message(args):
     logger.info("=" * 60)
     logger.info("LinkedIn Message Bot")
     logger.info(f"  Message    : {message_file}")
+    logger.info(f"  Direction  : {'up (older→newer)' if args.inv else 'down (newer→older)'}")
     logger.info(f"  Date limit : {date_limit or 'none (full list)'}")
     logger.info(f"  Start date : {start_date or 'none (top or clicked card)'}")
     logger.info(f"  Dry run    : {'yes' if args.dry_run else 'no'}")
@@ -251,6 +260,7 @@ def run_message(args):
         start_date=start_date,
         dry_run=args.dry_run,
         max_messages=args.max_messages,
+        inv=args.inv,
     )
     try:
         bot.run()
