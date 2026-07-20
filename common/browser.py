@@ -22,6 +22,17 @@ def create_driver(attach_to_existing=False):
     driver = webdriver.Chrome(options=options)
 
     try:
+        # Without this, an unfocused/occluded Chrome window makes the
+        # renderer treat the tab as backgrounded: LinkedIn's virtualized
+        # result list stops mounting new items, so the connect bot's page
+        # scan finds zero "Invite to connect" buttons and just pages
+        # forward forever. Spoofing focus at the CDP level keeps rendering
+        # identical to the focused case without stealing the OS window.
+        driver.execute_cdp_cmd("Emulation.setFocusEmulationEnabled", {"enabled": True})
+    except Exception as e:
+        logger.debug(f"Could not enable focus emulation: {type(e).__name__}: {e}")
+
+    try:
         driver.get_log("performance")
         perf_logging = True
         logger.debug("Performance logging enabled; HTTP 429 detection active.")

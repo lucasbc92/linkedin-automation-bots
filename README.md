@@ -94,15 +94,15 @@ Both bots read their message text from plain-text template files, so you can
 edit wording without touching code.
 
 ```
-templates/
-├── connect/      # used by `python main.py connect`
-│   ├── message.txt          (default)
-│   ├── message_formal.txt
-│   ├── message_objetiva.txt
-│   └── … other variants
-└── message/      # used by `python main.py message`
-    ├── message.txt          (default)
-    └── reconnect.txt
+connect/msg_templates/   # used by `python main.py connect`
+├── message.txt          (default)
+├── message_formal.txt
+├── message_objetiva.txt
+└── … other variants
+
+message/msg_templates/   # used by `python main.py message`
+├── message.txt          (default)
+└── reconnect.txt
 ```
 
 **Format** (handled by [`common/messages.py`](common/messages.py)):
@@ -115,7 +115,7 @@ templates/
   space) is dropped so the greeting still reads cleanly.
 
 **Picking a template:** pass `-m <filename>` (resolved inside that bot's
-`templates/<bot>/` folder), or `-m <path>` to point anywhere. With no `-m`, the
+`<bot>/msg_templates/` folder), or `-m <path>` to point anywhere. With no `-m`, the
 bot uses `message.txt`.
 
 **Character limits:** connection-request notes are capped by LinkedIn at **300
@@ -194,13 +194,12 @@ linkedin-automation-bots/
 │   └── logging_setup.py # file + console logging
 ├── connect/             # Connect bot  → see connect/README.md
 │   ├── bot.py
+│   ├── msg_templates/   # editable message text (see Templates above)
 │   └── examples/        # saved LinkedIn HTML fixtures for selector work
 ├── message/             # Message bot  → see message/README.md
 │   ├── bot.py
+│   ├── msg_templates/   # editable message text (see Templates above)
 │   └── messaging-bot.spec.md
-├── templates/           # editable message text (see Templates above)
-│   ├── connect/
-│   └── message/
 └── docs/                # design specs
 ```
 

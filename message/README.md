@@ -13,24 +13,27 @@ Starting from an open **Messaging** tab, the bot:
 1. Finds the messaging tab among your open Chrome tabs (falling back to the
    current tab).
 2. Determines where to start (see [Where it starts](#where-it-starts) below).
-3. Walks the conversation list **strictly downward, one card at a time** — the
-   next contact is always the card right after the current one, never a rescan
-   from the top. For each card it:
+3. Walks the conversation list **strictly in one direction, one card at a
+   time** — downward (newer→older) by default, or upward (older→newer) with
+   `-i`/`--inv`. The next contact is always the adjacent card in that
+   direction, never a rescan from the top. For each card it:
    - skips **Sponsored**, **InMail**, and **LinkedIn Offer** cards (identified
      by their pill label);
    - skips anyone already recorded in the send history;
-   - optionally stops once a conversation is older than `--date-limit`;
+   - optionally stops once a conversation crosses `--date-limit` (older than
+     it going down, newer than it going up with `-i`);
    - opens the thread, types a personalized message into the compose box, and
      sends it.
 4. Lazy-loads more conversations (by focusing the last card) until it reaches
-   the bottom of the list (or hits `--max`).
+   the bottom of the list (or hits `--max`). No lazy-loading is needed walking
+   upward with `-i` — every card above the start point is already loaded.
 
 Sending a message makes that conversation jump to the top of the list, so the
 bot captures the *next* card **before** sending. That is what keeps the walk
 anchored: nothing after the send is ever computed relative to the top of the
 list, so already-messaged contacts up there can never become targets again.
 
-The message text comes from a template in [`templates/message/`](../templates/message/).
+The message text comes from a template in [`message/msg_templates/`](../message/msg_templates/).
 `{name}` is replaced with the contact's first name. Unlike the connect bot,
 direct messages have **no 300-character cap**, so templates are never truncated.
 See [Templates](../README.md#templates) in the root README for the format.
@@ -44,30 +47,39 @@ python main.py message --max 10               # stop after 10 messages
 python main.py message --date-limit 2025/12/31  # stop at conversations older than this
 python main.py message --start-date 2025/07/30  # scroll down to this date and start there
 python main.py message -m reconnect.txt --max 5 --dry-run
+python main.py message -i -m reconnect_older.txt --date-limit 2024/10/20
+    # click an old conversation first, then walk upward (older→newer),
+    # stopping once a conversation is newer than the date limit
 ```
 
 ### Options
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `-m`, `--message FILE` | `message.txt` | Template file in `templates/message/`. A bare filename is resolved against that folder; a path is used as-is. |
-| `--date-limit YYYY/MM/DD` | none | Stop when a conversation is older than this date. Because the list is newest-first, the first too-old card halts the whole run. |
+| `-m`, `--message FILE` | `message.txt` | Template file in `message/msg_templates/`. A bare filename is resolved against that folder; a path is used as-is. |
+| `--date-limit YYYY/MM/DD` | none | Stop when a conversation is older than this date (or, with `-i`/`--inv`, newer than this date). |
 | `--start-date YYYY/MM/DD` | none | Scroll down the list (lazy-loading as needed), click the **first conversation dated on or before** this date, and start sending from there, inclusive. If no such conversation exists, the run ends without sending. |
+| `-i`, `--inv` | off | Walk the list **upward** (older → newer) instead of downward. Also flips `--date-limit` to mean "stop once a conversation is newer than this date." Useful for working through very old contacts from the bottom of the inbox up. |
 | `--dry-run` | off | Log who would be messaged and the first line of the text, without opening threads or sending anything. |
 | `--max N` | unlimited | Stop after sending `N` messages (a blast-radius cap). |
 | `-l`, `--log-level` | `DEBUG` | `DEBUG`, `INFO`, `WARN`, or `ERROR`. |
 
 ## Where it starts
 
-- **No conversation open** → starts from the top of the list (most recent).
+- **No conversation open** → starts from the top of the list (most recent), or
+  the bottom (oldest) when `-i`/`--inv` is given.
 - **A conversation already open** (you clicked one before launching) → starts
-  **from that conversation, inclusive**, and continues downward. Every card
-  *above* the active one is skipped. This lets you resume from a known point or
-  start partway down the inbox.
+  **from that conversation, inclusive**, and continues in the walk direction
+  (downward by default, upward with `-i`). Every card on the other side of the
+  active one is skipped. This lets you resume from a known point, e.g. click
+  the oldest conversation in your inbox and run with `-i` to work upward
+  through old contacts.
 - **`--start-date` given** → the bot scrolls the list itself (focusing the last
   card to trigger lazy-loading, since plain scrolling doesn't reliably load
   more) until it finds the first conversation dated on or before that date,
   clicks it, and starts from there — same as if you had clicked it manually.
+  This works the same way regardless of `-i`, since it only affects where the
+  walk *starts*, not which direction it goes afterward.
 
 Every contact a message is confirmed sent to is also recorded in
 `message/.sent_history.json` (gitignored). The conversation list re-sorts by

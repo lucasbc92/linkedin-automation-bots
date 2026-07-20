@@ -12,6 +12,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from common.browser import create_driver
+from common.logging_setup import count_invites_sent, current_week_start, week_log_path
 from common.messages import MessageTemplates
 from common.names import display_first_name
 from common.sleep import allow_sleep, prevent_sleep
@@ -28,7 +29,7 @@ INVITE_ENDPOINT_FRAGMENTS = (
 
 class LinkedInConnectBot:
     def __init__(self, auto_continue=False,
-                 message_file="templates/connect/message.txt",
+                 message_file="connect/msg_templates/message.txt",
                  reverse=False, no_message=False, max_invites=None):
         self.auto_continue = auto_continue
         self.reverse = reverse
@@ -860,3 +861,8 @@ class LinkedInConnectBot:
             f"Session summary — sent: {self.connections_sent} | "
             f"failed: {self.connections_failed} | "
             f"skipped: {self.connections_skipped}")
+
+        weekly_total = count_invites_sent(week_log_path())
+        logger.info(
+            f"Weekly total (week of {current_week_start()}): "
+            f"{weekly_total} invitation(s) sent")

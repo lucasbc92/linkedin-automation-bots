@@ -126,25 +126,30 @@ def first_card_on_or_before(timestamps, target, today=None):
 
 
 class LinkedInMessageBot:
-    def __init__(self, message_file="templates/message/message.txt",
+    def __init__(self, message_file="message/msg_templates/message.txt",
                  date_limit=None, start_date=None, dry_run=False,
-                 max_messages=None):
+                 max_messages=None, inv=False):
         """
         Args:
             message_file: Path to the template file.
-            date_limit: ``date`` object; stop when a card is older than this.
-                        ``None`` → process the whole list.
+            date_limit: ``date`` object; stop when a card is older than this
+                        (or, with ``inv``, newer than this). ``None`` →
+                        process the whole list.
             start_date: ``date`` object; scroll down the list until the first
                         conversation dated on or before this, click it, and
                         start sending from there. ``None`` → start from the
                         top or from the card the user clicked manually.
             dry_run: If True, log what would be sent without typing or sending.
             max_messages: Stop after this many messages sent. ``None`` = unlimited.
+            inv: If True, walk the list upward (previous card, older→newer)
+                 instead of downward, and flip ``date_limit`` to mean "stop
+                 once a card is newer than this".
         """
         self.date_limit = date_limit
         self.start_date = start_date
         self.dry_run = dry_run
         self.max_messages = max_messages
+        self.inv = inv
 
         self.driver, _ = create_driver(attach_to_existing=True)
         self.wait = WebDriverWait(self.driver, 10)
@@ -516,6 +521,28 @@ class LinkedInMessageBot:
                 time.sleep(3)
         return None
 
+    def _prev_card(self, card):
+        """Return the conversation <li> right before ``card`` in the list.
+
+        No lazy-loading counterpart is needed here: by the time the walk
+        reaches an old card (either clicked manually or via --start-date),
+        every card above it toward the top was already loaded to get there.
+        """
+        try:
+            return self.driver.execute_script(
+                "let el = arguments[0].previousElementSibling;"
+                "while (el && !el.matches(arguments[1]))"
+                "  el = el.previousElementSibling;"
+                "return el;",
+                card, _CARD_ITEM)
+        except Exception as e:
+            logger.debug(f"Could not get the previous card: {e}")
+            return None
+
+    def _advance(self, card):
+        """Return the next card to process, honoring ``self.inv``."""
+        return self._prev_card(card) if self.inv else self._next_card(card)
+
     def _ensure_rendered(self, card, tries=3):
         """Return the card's name, scrolling it into view first if LinkedIn's
         virtualization has emptied it (occluded cards have no content until
@@ -621,9 +648,11 @@ class LinkedInMessageBot:
             self.failed += 1
 
     def run(self):
-        """Walk the conversation list strictly downward, one card at a time.
+        """Walk the conversation list strictly in one direction, one card at
+        a time — downward (newer→older) by default, or upward (older→newer)
+        when ``self.inv`` is set.
 
-        The next contact is ALWAYS the card right after the current one —
+        The next contact is ALWAYS the adjacent card in that direction —
         never a rescan of the list from the top. The list re-sorts the moment
         a message is sent (the messaged contact jumps to the top), so the
         next card is captured *before* sending; anything computed after the
@@ -649,12 +678,16 @@ class LinkedInMessageBot:
             current = self._active_card()
             if current is not None:
                 logger.info(
-                    "Starting from the active (clicked) conversation, "
-                    "walking down.")
+                    f"Starting from the active (clicked) conversation, "
+                    f"walking {'up' if self.inv else 'down'}.")
             else:
                 cards = self._get_cards()
-                current = cards[0] if cards else None
-                logger.info("No active conversation — starting from the top.")
+                if self.inv:
+                    current = cards[-1] if cards else None
+                    logger.info("No active conversation — starting from the bottom (inv).")
+                else:
+                    current = cards[0] if cards else None
+                    logger.info("No active conversation — starting from the top.")
 
             while current is not None:
                 name_full = self._ensure_rendered(current)
@@ -662,11 +695,17 @@ class LinkedInMessageBot:
                 # --- date-limit check ---
                 ts_raw = self._card_timestamp(current)
                 card_date = parse_card_timestamp(ts_raw) if ts_raw else None
-                if self.date_limit and card_date and card_date < self.date_limit:
-                    logger.info(
-                        f"Card for {name_full or '(unknown)'} dated {card_date} "
-                        f"is before date limit {self.date_limit}. Stopping.")
-                    break
+                if self.date_limit and card_date:
+                    if self.inv and card_date > self.date_limit:
+                        logger.info(
+                            f"Card for {name_full or '(unknown)'} dated {card_date} "
+                            f"is after date limit {self.date_limit}. Stopping (inv).")
+                        break
+                    if not self.inv and card_date < self.date_limit:
+                        logger.info(
+                            f"Card for {name_full or '(unknown)'} dated {card_date} "
+                            f"is before date limit {self.date_limit}. Stopping.")
+                        break
 
                 # --- decide whether this card gets a message ---
                 skip_reason = None
@@ -686,7 +725,7 @@ class LinkedInMessageBot:
                         f"Skipping {name_full or '(unnamed card)'} — {skip_reason}.")
                     if name_full:
                         handled.add(name_full)
-                    current = self._next_card(current)
+                    current = self._advance(current)
                     continue
 
                 handled.add(name_full)
@@ -695,12 +734,12 @@ class LinkedInMessageBot:
                 if self.dry_run:
                     first_line = message.splitlines()[0] if message else ""
                     logger.info(f"[DRY-RUN] Would send to {name_full}: {first_line}")
-                    current = self._next_card(current)
+                    current = self._advance(current)
                     continue
 
                 # Capture the next card BEFORE sending — sending moves the
                 # current card to the top of the list.
-                next_card = self._next_card(current)
+                next_card = self._advance(current)
                 next_name = (self._ensure_rendered(next_card)
                              if next_card is not None else None)
 
@@ -719,7 +758,9 @@ class LinkedInMessageBot:
                         f"the top.")
                     break
             else:
-                logger.info("Reached the bottom of the conversation list.")
+                logger.info(
+                    f"Reached the {'top' if self.inv else 'bottom'} "
+                    f"of the conversation list.")
 
         finally:
             allow_sleep()

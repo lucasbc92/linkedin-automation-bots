@@ -23,7 +23,7 @@ Starting from an open **people-search results** tab
 4. Verifies the invite registered (the Connect control turns **Pending**), then
    pages forward (or backward with `-r`) and repeats.
 
-The message text comes from a template in [`templates/connect/`](../templates/connect/).
+The message text comes from a template in [`connect/msg_templates/`](../connect/msg_templates/).
 `{name}` is replaced with the contact's first name; see
 [Templates](../README.md#templates) in the root README for the format.
 
@@ -42,7 +42,7 @@ python main.py connect --max 80              # stop after 80 invitations sent
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `-m`, `--message FILE` | `message.txt` | Template file in `templates/connect/`. A bare filename is resolved against that folder; a path is used as-is. |
+| `-m`, `--message FILE` | `message.txt` | Template file in `connect/msg_templates/`. A bare filename is resolved against that folder; a path is used as-is. |
 | `-n`, `--no-message` | off | Send invitations **without** a note (clicks "Send without a note"). |
 | `-r`, `--reverse` | off | Navigate results in reverse (click **Previous** instead of **Next**). |
 | `-y`, `--yes` | off | Auto-continue past the "close to the weekly invitation limit" warning instead of prompting. |
