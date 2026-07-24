@@ -101,6 +101,8 @@ examples:
   python main.py message -i -m reconnect_older.txt --date-limit 2024/10/20
       # click an old conversation first, then walk upward (older→newer),
       # stopping once a conversation is newer than the date limit
+  python main.py message --last-message-regex "You:.*" 
+      # only message conversations where your last message matches the regex
 
 templates live in:  message/msg_templates/
 """
@@ -178,6 +180,10 @@ def build_parser():
         "--max", dest="max_messages", type=int, metavar="N",
         help="Stop after sending N messages (blast-radius limit)")
     mp.add_argument(
+        "--last-message-regex", metavar="REGEX",
+        help="Only message conversations whose last message preview matches "
+             "this regular expression")
+    mp.add_argument(
         "-l", "--log-level", default="DEBUG",
         choices=["DEBUG", "INFO", "WARN", "ERROR"],
         help="Log verbosity (default: DEBUG)")
@@ -250,6 +256,7 @@ def run_message(args):
     logger.info(f"  Start date : {start_date or 'none (top or clicked card)'}")
     logger.info(f"  Dry run    : {'yes' if args.dry_run else 'no'}")
     logger.info(f"  Max msgs   : {args.max_messages or 'unlimited'}")
+    logger.info(f"  Last msg regex: {args.last_message_regex or 'none'}")
     logger.info(f"  Log level  : {args.log_level}")
     logger.info("=" * 60)
 
@@ -261,6 +268,7 @@ def run_message(args):
         dry_run=args.dry_run,
         max_messages=args.max_messages,
         inv=args.inv,
+        last_message_regex=args.last_message_regex,
     )
     try:
         bot.run()

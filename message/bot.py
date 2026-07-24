@@ -36,6 +36,7 @@ _CARD_ITEM = "li.msg-conversation-listitem"
 _NAME_SELECTOR = "h3.msg-conversation-listitem__participant-names span.truncate"
 _TIME_SELECTOR = "time.msg-conversation-listitem__time-stamp"
 _CARD_PILL_SELECTOR = "span.msg-conversation-card__pill"
+_LAST_MESSAGE_SELECTOR = "p.msg-conversation-card__message-snippet"
 # Pill labels that mean the conversation should be left untouched.
 _SKIP_PILL_LABELS = ("sponsored", "inmail", "linkedin offer")
 _COMPOSE_BOX = "div.msg-form__contenteditable[contenteditable='true'][role='textbox']"
@@ -128,7 +129,7 @@ def first_card_on_or_before(timestamps, target, today=None):
 class LinkedInMessageBot:
     def __init__(self, message_file="message/msg_templates/message.txt",
                  date_limit=None, start_date=None, dry_run=False,
-                 max_messages=None, inv=False):
+                 max_messages=None, inv=False, last_message_regex=None):
         """
         Args:
             message_file: Path to the template file.
@@ -144,12 +145,19 @@ class LinkedInMessageBot:
             inv: If True, walk the list upward (previous card, older→newer)
                  instead of downward, and flip ``date_limit`` to mean "stop
                  once a card is newer than this".
+            last_message_regex: Regular expression string; only conversations
+                                whose last message preview matches will be
+                                messaged. ``None`` → no filtering by last message.
         """
         self.date_limit = date_limit
         self.start_date = start_date
         self.dry_run = dry_run
         self.max_messages = max_messages
         self.inv = inv
+        self.last_message_regex = (
+            re.compile(last_message_regex)
+            if last_message_regex else None
+        )
 
         self.driver, _ = create_driver(attach_to_existing=True)
         self.wait = WebDriverWait(self.driver, 10)
@@ -351,6 +359,14 @@ class LinkedInMessageBot:
                 if label in text:
                     return p.text.strip() or label.capitalize()
         return None
+
+    def _card_last_message(self, card):
+        """Return the last message preview text from the card, or None."""
+        try:
+            el = card.find_element(By.CSS_SELECTOR, _LAST_MESSAGE_SELECTOR)
+            return el.text.strip()
+        except Exception:
+            return None
 
     def _scroll_list_bottom(self):
         """Scroll the conversation list container to trigger lazy-loading."""
@@ -719,6 +735,12 @@ class LinkedInMessageBot:
                         skip_reason = "already handled in this run"
                     elif name_full in history:
                         skip_reason = "already messaged in a previous run"
+                    elif self.last_message_regex is not None:
+                        last_msg = self._card_last_message(current)
+                        if last_msg is None or not self.last_message_regex.search(last_msg):
+                            skip_reason = (
+                                f"last message does not match regex "
+                                f"'{self.last_message_regex.pattern}'")
 
                 if skip_reason:
                     logger.info(
