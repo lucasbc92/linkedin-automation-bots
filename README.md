@@ -48,21 +48,27 @@ downloaded automatically the first time you run a bot — no manual driver setup
 
 The bots connect to Chrome on `127.0.0.1:9222`, so Chrome must be started with
 remote debugging enabled. **Fully quit Chrome first**, then relaunch it with the
-flag:
+flags below.
+
+> **Note:** recent Chrome versions silently refuse to open the DevTools port
+> when using the **default** user-data-dir (a security measure against
+> cookie-theft malware that scans for open 9222 ports). You must also pass
+> `--user-data-dir` pointing at a separate, dedicated profile folder — you'll
+> need to log in to LinkedIn once in that new profile.
 
 **Windows (PowerShell):**
 ```powershell
-& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\ChromeDebugProfile"
 ```
 
 **macOS:**
 ```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir="$HOME/ChromeDebugProfile"
 ```
 
 **Linux:**
 ```bash
-google-chrome --remote-debugging-port=9222
+google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/ChromeDebugProfile"
 ```
 
 Then, in that Chrome window:
