@@ -12,10 +12,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from common.browser import create_driver
-from common.logging_setup import count_invites_sent, current_week_start, week_log_path
+from common.logging_setup import current_week_start
 from common.messages import MessageTemplates
 from common.names import display_first_name
 from common.sleep import allow_sleep, prevent_sleep
+from connect.history import count_invites_for_week, record_invite
+from connect.tech_recruiter import DEFAULT_MIN_SCORE, score_title
 
 logger = logging.getLogger("linkedin_bot")
 
@@ -30,11 +32,14 @@ INVITE_ENDPOINT_FRAGMENTS = (
 class LinkedInConnectBot:
     def __init__(self, auto_continue=False,
                  message_file="connect/msg_templates/message.txt",
-                 reverse=False, no_message=False, max_invites=None):
+                 reverse=False, no_message=False, max_invites=None,
+                 tech_only=True, min_title_score=DEFAULT_MIN_SCORE):
         self.auto_continue = auto_continue
         self.reverse = reverse
         self.no_message = no_message
         self.max_invites = max_invites
+        self.tech_only = tech_only
+        self.min_title_score = min_title_score
 
         self.driver, self.perf_logging = create_driver(attach_to_existing=True)
 
@@ -47,6 +52,7 @@ class LinkedInConnectBot:
         self.connections_sent = 0
         self.connections_failed = 0
         self.connections_skipped = 0
+        self.non_tech_skipped = 0
 
     def _cdp_click(self, element, description="element"):
         """Dispatch a trusted click via Chrome DevTools Protocol.
@@ -461,6 +467,101 @@ class LinkedInConnectBot:
             logger.debug(f"Error extracting name: {e}")
             return None
 
+    #: Prefixes of the "Current: ... / Past: ..." snippet under a search result.
+    _ROLE_SNIPPET_PREFIXES = ("current:", "past:", "atual:", "anterior:")
+
+    def find_result_card(self, connect_button):
+        """Climb from a Connect control to the ancestor holding one profile.
+
+        Stops one level below the ancestor that contains a *second* profile
+        link, which is the result list itself — going that far would read the
+        neighbouring person's headline.
+        """
+        card = None
+        element = connect_button
+        for _ in range(12):
+            try:
+                element = element.find_element(By.XPATH, "..")
+            except Exception:
+                break
+            try:
+                links = element.find_elements(
+                    By.XPATH, ".//a[contains(@href, 'linkedin.com/in/')]")
+            except Exception:
+                continue
+            hrefs = {(link.get_attribute("href") or "").split("?")[0].rstrip("/")
+                     for link in links}
+            hrefs.discard("")
+            if len(hrefs) > 1:
+                break
+            if hrefs:
+                card = element
+        return card
+
+    def extract_title_texts(self, connect_button):
+        """Return the headline (and role snippet) shown on this person's card.
+
+        Both are returned because LinkedIn does not always render a headline;
+        when it is missing the "Current: Tech recruiter at X" snippet carries
+        the same information.
+        """
+        card = self.find_result_card(connect_button)
+        if card is None:
+            return []
+
+        headline = None
+        snippet = None
+        try:
+            paragraphs = card.find_elements(By.XPATH, ".//p")
+        except Exception:
+            paragraphs = []
+
+        for paragraph in paragraphs:
+            try:
+                text = paragraph.text.strip()
+            except Exception:
+                continue
+            if not text:
+                continue
+            lowered = text.lower()
+            if lowered.startswith(self._ROLE_SNIPPET_PREFIXES):
+                if snippet is None:
+                    snippet = text
+                continue
+            # The name paragraph wraps the profile link; skip it.
+            try:
+                if paragraph.find_elements(
+                        By.XPATH, ".//a[contains(@href, 'linkedin.com/in/')]"):
+                    continue
+            except Exception:
+                pass
+            if headline is None:
+                headline = text
+
+        if headline is None and snippet is None:
+            # Older markup renders the headline outside a <p>; fall back to the
+            # card's rendered text, whose second line is the headline.
+            try:
+                lines = [ln.strip() for ln in card.text.splitlines() if ln.strip()]
+            except Exception:
+                lines = []
+            if len(lines) > 1:
+                headline = lines[1]
+
+        return [text for text in (headline, snippet) if text]
+
+    def evaluate_title(self, connect_button, target_label):
+        """Score this person's headline. Returns the best verdict, or None."""
+        titles = self.extract_title_texts(connect_button)
+        if not titles:
+            logger.debug(f"No headline found on the card for {target_label}")
+            return None
+
+        best = max((score_title(text) for text in titles),
+                   key=lambda verdict: verdict.score)
+        logger.debug(f"Title for {target_label}: {best!r}")
+        return best
+
     def extract_name_from_modal(self, shadow_root=None):
         """Extract name from the invite modal body (<strong>Full Name</strong>)."""
         try:
@@ -568,6 +669,30 @@ class LinkedInConnectBot:
             name = self.extract_name_from_aria_label(target_label)
             if name:
                 logger.info(f"Processing {target_label} → first name: {name}")
+
+            # Judge the headline before clicking: a skipped card must cost
+            # nothing against the weekly invitation quota.
+            if self.tech_only:
+                verdict = self.evaluate_title(target, target_label)
+                if verdict is None:
+                    logger.warning(
+                        f"Could not read a headline for {target_label}. "
+                        f"Skipping (tech-recruiter filter is on).")
+                    self.connections_skipped += 1
+                    self.non_tech_skipped += 1
+                    continue
+                if verdict.score < self.min_title_score:
+                    logger.info(
+                        f"Skipping {name or target_label} — not a tech "
+                        f"recruiter: {verdict.title!r} "
+                        f"(score {verdict.score:.2f} < {self.min_title_score:.2f}; "
+                        f"{verdict.reason})")
+                    self.connections_skipped += 1
+                    self.non_tech_skipped += 1
+                    continue
+                logger.info(
+                    f"Tech recruiter confirmed for {name or target_label}: "
+                    f"{verdict.title!r} (score {verdict.score:.2f}; {verdict.reason})")
 
             try:
                 self.driver.execute_script(
@@ -677,6 +802,9 @@ class LinkedInConnectBot:
                 full_name = m.group(1) if m else None
                 if self.verify_successful_invitation_sent(target_label, full_name):
                     self.connections_sent += 1
+                    # Recorded before anything else can fail, so an invite is
+                    # never counted in the log but missing from the ledger.
+                    record_invite(full_name or name or target_label)
                     logger.info(
                         f"Invitation sent to {name or target_label} "
                         f"[sent={self.connections_sent}, "
@@ -827,6 +955,22 @@ class LinkedInConnectBot:
             logger.error(f"Error navigating page: {e}")
             return False
 
+    def log_summary(self, pages_processed):
+        """Log the session and weekly totals. Safe to call from a finally block."""
+        direction = "reverse" if self.reverse else "forward"
+        logger.info(f"Completed ({direction}) — {pages_processed} page(s) processed.")
+        logger.info(
+            f"Session summary — sent: {self.connections_sent} | "
+            f"failed: {self.connections_failed} | "
+            f"skipped: {self.connections_skipped}"
+            + (f" (of which {self.non_tech_skipped} not tech recruiters)"
+               if self.non_tech_skipped else ""))
+
+        week = current_week_start()
+        logger.info(
+            f"Weekly total (week of {week}): "
+            f"{count_invites_for_week(week)} invitation(s) sent")
+
     def run_automation(self, max_pages=100):
         """Run the full automation across all result pages."""
         page_num = 1
@@ -852,17 +996,10 @@ class LinkedInConnectBot:
 
                 page_num += 1
                 time.sleep(random.uniform(3, 5))
+        except KeyboardInterrupt:
+            # Swallowed here so the summary below still runs; main.py's
+            # handler only covers interrupts outside this method.
+            logger.warning("Stopped by user (Ctrl+C)")
         finally:
             allow_sleep()
-
-        direction = "reverse" if self.reverse else "forward"
-        logger.info(f"Completed ({direction}) — {page_num} page(s) processed.")
-        logger.info(
-            f"Session summary — sent: {self.connections_sent} | "
-            f"failed: {self.connections_failed} | "
-            f"skipped: {self.connections_skipped}")
-
-        weekly_total = count_invites_sent(week_log_path())
-        logger.info(
-            f"Weekly total (week of {current_week_start()}): "
-            f"{weekly_total} invitation(s) sent")
+            self.log_summary(page_num)

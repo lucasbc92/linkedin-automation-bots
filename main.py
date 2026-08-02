@@ -37,6 +37,8 @@ import argcomplete
 from argcomplete.completers import BaseCompleter
 
 from common.logging_setup import setup_logging
+# stdlib-only, unlike connect.bot — safe to import before the browser exists.
+from connect.tech_recruiter import DEFAULT_MIN_SCORE
 
 def _template_root(bot):
     return os.path.join(bot, "msg_templates")
@@ -86,8 +88,11 @@ examples:
   python main.py connect -y -l INFO                 # auto-continue, less verbose
   python main.py connect -r                         # navigate in reverse (Previous)
   python main.py connect --max 80                   # stop after 80 invitations sent
+  python main.py connect --any-title                # invite every recruiter, not just tech
+  python main.py connect --title-score 0.9          # stricter tech-recruiter filter
 
-templates live in:  connect/msg_templates/
+by default only headlines that read as a *tech* recruiter are invited
+(scored by connect/tech_recruiter.py); templates live in:  connect/msg_templates/
 """
 
 _MESSAGE_EPILOG = """
@@ -105,6 +110,15 @@ examples:
       # only message conversations where your last message matches the regex
 
 templates live in:  message/msg_templates/
+"""
+
+_STATS_EPILOG = """
+examples:
+  python main.py stats                # invitations sent per week
+  python main.py stats --weeks 4      # only the last 4 weeks
+  python main.py stats --backfill     # import past invites from connect/logs/
+
+a logging week starts Sunday 21:00 (America/Sao_Paulo)
 """
 
 
@@ -142,6 +156,13 @@ def build_parser():
     cp.add_argument(
         "--max", dest="max_invites", type=int, metavar="N",
         help="Stop after sending N invitations (blast-radius limit)")
+    cp.add_argument(
+        "--any-title", action="store_true",
+        help="Invite every recruiter, skipping the tech-recruiter headline filter")
+    cp.add_argument(
+        "--title-score", type=float, default=DEFAULT_MIN_SCORE, metavar="S",
+        help=f"Minimum tech-recruiter similarity score, 0.0-1.0 "
+             f"(default: {DEFAULT_MIN_SCORE})")
     cp.add_argument(
         "-l", "--log-level", default="DEBUG",
         choices=["DEBUG", "INFO", "WARN", "ERROR"],
@@ -188,6 +209,23 @@ def build_parser():
         choices=["DEBUG", "INFO", "WARN", "ERROR"],
         help="Log verbosity (default: DEBUG)")
 
+    # ---- stats ----
+    sp = sub.add_parser(
+        "stats",
+        help="Show how many invitations were sent per week",
+        description="Report invitations sent per week from the Connect bot's "
+                    "ledger (connect/.invites.jsonl).",
+        epilog=_STATS_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sp.add_argument(
+        "--weeks", type=int, metavar="N",
+        help="Show only the last N weeks (default: all)")
+    sp.add_argument(
+        "--backfill", action="store_true",
+        help="Import invitations from connect/logs/ into the ledger first "
+             "(safe to repeat — already-known entries are skipped)")
+
     argcomplete.autocomplete(parser)
     return parser
 
@@ -210,6 +248,7 @@ def run_connect(args):
     logger.info(f"  Navigation : {'reverse (Previous)' if args.reverse else 'forward (Next)'}")
     logger.info(f"  Auto-cont  : {'on (-y)' if args.yes else 'off'}")
     logger.info(f"  Max invites: {args.max_invites or 'unlimited'}")
+    logger.info(f"  Titles     : {'any recruiter (--any-title)' if args.any_title else f'tech recruiters only (score >= {args.title_score:.2f})'}")
     logger.info(f"  Log level  : {args.log_level}")
     logger.info("=" * 60)
 
@@ -220,6 +259,8 @@ def run_connect(args):
         reverse=args.reverse,
         no_message=args.no_message,
         max_invites=args.max_invites,
+        tech_only=not args.any_title,
+        min_title_score=args.title_score,
     )
     try:
         bot.run_automation(max_pages=100)
@@ -278,6 +319,35 @@ def run_message(args):
         logger.error(f"Stopped due to error: {e}")
 
 
+def run_stats(args):
+    from common.logging_setup import current_week_start
+    from connect.history import DEFAULT_INVITE_FILE, backfill_from_logs, weekly_counts
+
+    if args.backfill:
+        added = backfill_from_logs()
+        print(f"Backfilled {added} invitation(s) from connect/logs/\n")
+
+    counts = weekly_counts()
+    if not counts:
+        print(f"No invitations recorded yet in {DEFAULT_INVITE_FILE}.")
+        print("Run 'python main.py stats --backfill' to import past runs "
+              "from connect/logs/.")
+        return
+
+    weeks = list(counts.items())
+    if args.weeks:
+        weeks = weeks[-args.weeks:]
+
+    this_week = current_week_start().isoformat()
+
+    print("Invitations sent per week (week starts Sunday 21:00 BRT)\n")
+    for week, count in weeks:
+        marker = "  ← current" if week == this_week else ""
+        print(f"  week of {week}   {count:>4}{marker}")
+    print(f"  {'-' * 26}")
+    print(f"  total{' ' * 15}{sum(c for _, c in weeks):>4}")
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -290,6 +360,8 @@ if __name__ == "__main__":
         run_connect(args)
     elif args.command == "message":
         run_message(args)
+    elif args.command == "stats":
+        run_stats(args)
     else:
         parser.print_help()
         sys.exit(1)

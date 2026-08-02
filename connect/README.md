@@ -16,11 +16,15 @@ Starting from an open **people-search results** tab
    search-results tab, then the current tab).
 2. On each results page, scrolls to lazy-load every card, then walks every
    **"Invite … to connect"** control top-to-bottom.
-3. For each person, opens the invite modal and either:
+3. Reads each person's headline off their card and skips anyone who is not a
+   **tech** recruiter — see [Tech-recruiter filter](#tech-recruiter-filter).
+   Skipped cards are never clicked, so they cost nothing against your weekly
+   invitation quota.
+4. For each remaining person, opens the invite modal and either:
    - clicks **Add a note**, types a personalized message, and clicks
      **Send invitation**; or
    - clicks **Send without a note** (when run with `-n`).
-4. Verifies the invite registered (the Connect control turns **Pending**), then
+5. Verifies the invite registered (the Connect control turns **Pending**), then
    pages forward (or backward with `-r`) and repeats.
 
 The message text comes from a template in [`connect/msg_templates/`](../connect/msg_templates/).
@@ -36,6 +40,8 @@ python main.py connect -n                    # send invitations with no note
 python main.py connect -y -l INFO            # auto-continue past the warning, quieter
 python main.py connect -r                    # page backwards (Previous instead of Next)
 python main.py connect --max 80              # stop after 80 invitations sent
+python main.py connect --any-title           # invite every recruiter, not just tech
+python main.py connect --title-score 0.9     # stricter tech-recruiter filter
 ```
 
 ### Options
@@ -47,7 +53,51 @@ python main.py connect --max 80              # stop after 80 invitations sent
 | `-r`, `--reverse` | off | Navigate results in reverse (click **Previous** instead of **Next**). |
 | `-y`, `--yes` | off | Auto-continue past the "close to the weekly invitation limit" warning instead of prompting. |
 | `--max N` | unlimited | Stop after sending `N` invitations (blast-radius limit, independent of LinkedIn's own weekly cap). |
+| `--any-title` | off | Invite **every** recruiter, skipping the tech-recruiter headline filter. |
+| `--title-score S` | `0.80` | Minimum tech-recruiter similarity score (`0.0`–`1.0`). Raise it to be stricter, lower it to be more permissive. |
 | `-l`, `--log-level` | `DEBUG` | `DEBUG`, `INFO`, `WARN`, or `ERROR`. |
+
+## Tech-recruiter filter
+
+A people-search for "recruiter" returns every flavour of recruiter — health,
+legal, retail, sales — plus people who are not recruiters at all. By default the
+bot invites only the ones hiring for **technology**, scoring each card's
+headline with [`connect/tech_recruiter.py`](tech_recruiter.py) before clicking
+anything.
+
+Scoring is similarity-based (stdlib `difflib`), so it survives typos, casing,
+accents and padding words. A headline scores through one of three routes:
+
+| Route | Example | Score |
+|-------|---------|-------|
+| **Composite** — one phrase that proves it on its own | `Tech Recruiter \| Recrutamento e seleção` | 1.00 |
+| **Co-occurrence** — a recruiting word and a technology word in the *same* segment | `Recrutamento de Desenvolvedores` | 0.90 |
+| **Separate segments** — the same two words in different bullets | `Talent Acquisition Specialist \| Technology` | 0.85 |
+
+Segments are the chunks between `|`, `/`, `•`, `,` and `;`, so a technology word
+in an unrelated bullet cannot vouch for a recruiting word in another one.
+Domain words that mark a *non*-tech specialisation (`saúde`, `jurídico`,
+`varejo`, `engenharia civil`, …) subtract a penalty — enough to sink a
+borderline match, never enough to sink a clean composite hit, since
+`Tech Recruiter | Vendas` still recruits for tech.
+
+Headlines below the threshold are logged with their score and reason and
+counted separately in the run summary:
+
+```
+Skipping Ana — not a tech recruiter: 'Sales Recruiter' (score 0.00 < 0.80; ...)
+Session summary — sent: 42 | failed: 0 | skipped: 11 (of which 9 not tech recruiters)
+```
+
+The word lists (`COMPOSITE_TERMS`, `RECRUITER_TERMS`, `TECH_TERMS`,
+`NEGATIVE_TERMS`) live at the top of `connect/tech_recruiter.py` and are meant
+to be edited. After changing them, re-run the tests:
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
+To turn the filter off for one run, pass `--any-title`.
 
 ## Connection-request limits
 
@@ -64,6 +114,25 @@ two kinds of limit signals and stops or prompts accordingly:
 
 When the limit is reached mid-run, the bot ends gracefully and prints the
 session summary (`sent / failed / skipped`).
+
+## Counting invitations
+
+Every confirmed invitation is appended immediately to `connect/.invites.jsonl`
+(gitignored — it holds real contact names). Because it's written the moment the
+invite registers, the count survives a `Ctrl+C`, a crash, or a run at a log
+level that hides INFO lines.
+
+Every run — including one you interrupt — ends with the session summary plus
+the running weekly total. To check the totals at any time:
+
+```bash
+python main.py stats             # invitations per week
+python main.py stats --weeks 4   # last 4 weeks only
+python main.py stats --backfill  # import past runs from connect/logs/ (idempotent)
+```
+
+A logging week runs Sunday 21:00 → Sunday 21:00 (America/São_Paulo), matching
+the weekly log filenames.
 
 ## How it works (implementation notes)
 

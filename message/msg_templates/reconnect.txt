@@ -1,9 +1,9 @@
-Oi, {name}! Quanto tempo, hein? Espero que esteja tudo bem por aí. 😊
+Olá! Quanto tempo, hein? Espero que esteja tudo bem por aí. 😊
 
-Da última vez que conversamos, eu estava em busca de recolocação — e deu certo: desde agosto do ano passado estou de volta ao mercado e hoje atuo como Desenvolvedor Java Full Stack no programa de benefícios da Vivo. Agora estou sondando o mercado com calma, em busca de uma oportunidade 100% remota que seja um passo acima. 🏠
+Da última vez que conversamos, eu estava em busca de recolocação — e deu certo: voltei ao mercado em agosto do ano passado. Agora, voltei a sondar o mercado em busca de uma oportunidade 100% remota que me coloque de volta na atividade.
 
 Um resumo rápido do meu perfil:
-• 6,5 anos de experiência full stack — back-end com Java + Spring Boot (onde mais gosto de atuar) e front-end com React/Angular em TypeScript;
+• 7 anos de experiência full stack — back-end com Java + Spring Boot (onde mais gosto de atuar) e front-end com React/Angular em TypeScript;
 • microsserviços de alto volume em produção (milhões de transações diárias no Magalu) e histórico de "bombeiro", destravando incidentes críticos; 🧑‍🚒🔥
 • desenvolvimento assistido por IA (Claude Code, Cursor) com Spec Driven Development, entregando mais rápido e com mais qualidade.
 

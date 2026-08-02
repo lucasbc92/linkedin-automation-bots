@@ -1,1 +1,14 @@
-Nothing should be ignored in this case, as the changes only include Python source files (.py) without any build artifacts, dependencies, or temporary files.
+# Local records of who was contacted — personal data, never commit
+.invites.jsonl
+.sent_history.json
+
+# Run logs
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Generated knowledge-graph output
+graphify-out/

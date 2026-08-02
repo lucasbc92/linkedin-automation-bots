@@ -28,15 +28,6 @@ def week_log_path(now=None, log_dir=_LOG_DIR):
     return Path(log_dir) / f"week-{current_week_start(now).isoformat()}.log"
 
 
-def count_invites_sent(log_path):
-    """Count successful invitations recorded across a weekly log file."""
-    path = Path(log_path)
-    if not path.exists():
-        return 0
-    with path.open(encoding="utf-8") as f:
-        return sum(1 for line in f if "Invitation sent to " in line)
-
-
 def setup_logging(level=logging.DEBUG, log_file=None, log_dir=None):
     logging.addLevelName(logging.WARNING, "WARN")
 
