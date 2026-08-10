@@ -1,16 +1,18 @@
-Oi, {name}! 
+Oi, {name}, tudo bem?
 
-Estou sondando o mercado com calma, em busca de uma oportunidade 100% remota que seja um passo acima na minha carreira. 🏠
+Obrigado por aceitar a conexão! 😊 Como sei que a rotina de recrutamento é corrida, volto aqui só pra deixar meu contexto completo — prometo ser breve.
 
-Um resumo rápido do meu perfil:
-• 6,5 anos de experiência full stack — back-end com Java + Spring Boot (onde mais gosto de atuar) e front-end com React/Angular em TypeScript;
-• microsserviços de alto volume em produção (milhões de transações diárias no Magalu) e histórico de "bombeiro", destravando incidentes críticos; 🧑‍🚒🔥
+Sigo sondando o mercado com calma, em busca de uma oportunidade 100% remota que seja um passo acima na minha carreira. 🏠
+
+Complementando o que te contei no convite:
+• 7 anos de experiência full stack — back-end com Java + Spring Boot (onde mais gosto de atuar) e front-end com React/Angular em TypeScript;
+• microsserviços financeiros de alto volume em produção (milhões de transações diárias no Magalu) e refatoração do Vivo Valoriza, além de histórico de "bombeiro", destravando incidentes críticos; 🧑‍🚒🔥
 • desenvolvimento assistido por IA (Claude Code, Cursor) com Spec Driven Development, entregando mais rápido e com mais qualidade.
 
-Se souber de alguma vaga remota alinhada a esse perfil — ou puder me indicar para alguém do seu time — fico muito agradecido. E se quiser só trocar uma ideia, melhor ainda!
+Se souber de alguma vaga remota alinhada a esse perfil — ou puder me indicar para alguém do seu time — fico muito agradecido. Se não for o momento, também me ajuda muito me deixar no radar pra quando abrir algo. E se quiser só trocar uma ideia, melhor ainda!
 
 🔗 Currículo HTML bilíngue: https://lucasbc92.github.io/resume
-📄 Currículo PDF: https://github.com/lucasbc92/resume/raw/refs/heads/resume_ptbr.pdf
+📄 Currículo PDF: https://github.com/lucasbc92/resume/raw/refs/main/heads/resume_ptbr.pdf
 📱 WhatsApp: https://wa.me/+5548991224064
 
 Um abraço,

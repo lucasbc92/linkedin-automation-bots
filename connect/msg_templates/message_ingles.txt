@@ -1,0 +1,4 @@
+Hi, {name}! 😄
+I'm a Java Fullstack Developer for 7 years, and used Spring Boot with React/Angular.
+I’ve built high-scale financial microservices at LuizaLabs and the Vivo Valoriza platform.
+I'm exploring remote international jobs, and I'd love to hear what you have to say!
