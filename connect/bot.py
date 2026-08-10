@@ -697,7 +697,7 @@ class LinkedInConnectBot:
             try:
                 self.driver.execute_script(
                     "arguments[0].scrollIntoView({block: 'center'});", target)
-                time.sleep(random.uniform(1, 2))
+                time.sleep(random.uniform(2, 5))
 
                 self._robust_click(target, f"Connect control ({target_label})")
                 time.sleep(3)
@@ -718,7 +718,7 @@ class LinkedInConnectBot:
                     self.dismiss_open_modal()
                     self.wait_modal_closed(shadow, timeout=3)
                     self.connections_skipped += 1
-                    time.sleep(random.uniform(1, 2))
+                    time.sleep(random.uniform(2, 4))
                     continue
 
                 if not name:
@@ -824,7 +824,7 @@ class LinkedInConnectBot:
                         f"failed={self.connections_failed}, "
                         f"skipped={self.connections_skipped}]")
 
-                time.sleep(random.uniform(3, 5))
+                time.sleep(random.uniform(8, 18))
 
             except ElementClickInterceptedException:
                 logger.warning(f"Connect control for {target_label} was intercepted")
@@ -995,7 +995,7 @@ class LinkedInConnectBot:
                     break
 
                 page_num += 1
-                time.sleep(random.uniform(3, 5))
+                time.sleep(random.uniform(12, 25))
         except KeyboardInterrupt:
             # Swallowed here so the summary below still runs; main.py's
             # handler only covers interrupts outside this method.

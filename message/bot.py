@@ -266,7 +266,7 @@ class LinkedInMessageBot:
         """Type text into the compose box and send it. Returns True on success."""
         try:
             self._insert_text(compose_box, text)
-            time.sleep(0.8)
+            time.sleep(random.uniform(1.5, 3.5))
 
             # Verify the box has content
             if self._box_is_empty(compose_box):
@@ -275,7 +275,7 @@ class LinkedInMessageBot:
 
             # Primary send: trusted Enter key
             compose_box.send_keys(Keys.ENTER)
-            time.sleep(3)
+            time.sleep(random.uniform(2, 4))
 
             # Verify sent: box should be empty / placeholder restored
             if self._box_is_empty(compose_box):
@@ -289,7 +289,7 @@ class LinkedInMessageBot:
                     "button.msg-form__send-button, "
                     "button[data-test-msg-send-btn]")
                 self._robust_click(send_btn, "Send button")
-                time.sleep(3)
+                time.sleep(random.uniform(2, 4))
                 return self._box_is_empty(compose_box)
             except NoSuchElementException:
                 logger.warning(f"No Send button found for {contact_label}.")
@@ -612,9 +612,9 @@ class LinkedInMessageBot:
         try:
             self.driver.execute_script(
                 "arguments[0].scrollIntoView({block: 'center'});", card)
-            time.sleep(random.uniform(1, 2))
+            time.sleep(random.uniform(2, 5))
             self._robust_click(card, f"conversation card ({name_full})")
-            time.sleep(3)
+            time.sleep(random.uniform(2, 4))
 
             if not self._wait_thread_open(name_full):
                 logger.warning(f"Thread for {name_full} did not open. Skipping.")
@@ -639,6 +639,9 @@ class LinkedInMessageBot:
                 self.skipped += 1
                 return
 
+            # Pause as if reading the thread before starting to type.
+            time.sleep(random.uniform(1.5, 3.5))
+
             logger.info(
                 f"Sending to {first or name_full}: "
                 f"{message.splitlines()[0] if message else ''}")
@@ -657,7 +660,7 @@ class LinkedInMessageBot:
                     f"[sent={self.sent}, failed={self.failed}, "
                     f"skipped={self.skipped}]")
 
-            time.sleep(random.uniform(4, 6))
+            time.sleep(random.uniform(10, 20))
 
         except Exception as e:
             logger.error(f"Error processing {name_full}: {e}")
@@ -677,6 +680,15 @@ class LinkedInMessageBot:
         """
         prevent_sleep()
         self._select_messaging_tab()
+
+        try:
+            self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, _CARD_ITEM)))
+        except TimeoutException:
+            logger.error(
+                "Conversation list never rendered any cards. "
+                "Nothing to do.")
+            allow_sleep()
+            return
 
         try:
             if self.start_date:
