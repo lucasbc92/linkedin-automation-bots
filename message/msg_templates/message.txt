@@ -12,7 +12,7 @@ Complementando o que te contei no convite:
 Se souber de alguma vaga remota alinhada a esse perfil — ou puder me indicar para alguém do seu time — fico muito agradecido. Se não for o momento, também me ajuda muito me deixar no radar pra quando abrir algo. E se quiser só trocar uma ideia, melhor ainda!
 
 🔗 Currículo HTML bilíngue: https://lucasbc92.github.io/resume
-📄 Currículo PDF: https://github.com/lucasbc92/resume/raw/refs/main/heads/resume_ptbr.pdf
+📄 Currículo PDF: https://github.com/lucasbc92/resume/raw/refs/heads/main/resume_ptbr.pdf
 📱 WhatsApp: https://wa.me/+5548991224064
 
 Um abraço,
