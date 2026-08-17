@@ -28,18 +28,26 @@ INVITE_ENDPOINT_FRAGMENTS = (
     "verifyQuotaAndCreate",
 )
 
+# Fast mode (--fast) keeps the jitter of the humanizing pauses but shrinks the
+# window to this fraction, never dropping below MIN_FAST_PAUSE seconds — some
+# gap is still needed for LinkedIn's UI to settle between actions.
+FAST_PAUSE_FACTOR = 0.1
+MIN_FAST_PAUSE = 0.5
+
 
 class LinkedInConnectBot:
     def __init__(self, auto_continue=False,
                  message_file="connect/msg_templates/message.txt",
                  reverse=False, no_message=False, max_invites=None,
-                 tech_only=True, min_title_score=DEFAULT_MIN_SCORE):
+                 tech_only=True, min_title_score=DEFAULT_MIN_SCORE,
+                 fast=False):
         self.auto_continue = auto_continue
         self.reverse = reverse
         self.no_message = no_message
         self.max_invites = max_invites
         self.tech_only = tech_only
         self.min_title_score = min_title_score
+        self.fast = fast
 
         self.driver, self.perf_logging = create_driver(attach_to_existing=True)
 
@@ -53,6 +61,19 @@ class LinkedInConnectBot:
         self.connections_failed = 0
         self.connections_skipped = 0
         self.non_tech_skipped = 0
+
+    def _pause_seconds(self, low, high):
+        """How long the next humanizing pause should last, in seconds."""
+        delay = random.uniform(low, high)
+        if self.fast:
+            delay = max(delay * FAST_PAUSE_FACTOR, MIN_FAST_PAUSE)
+        return delay
+
+    def _human_pause(self, low, high):
+        """Sleep a randomized human-like interval, shortened under --fast."""
+        delay = self._pause_seconds(low, high)
+        logger.debug(f"Pausing {delay:.1f}s{' (fast)' if self.fast else ''}")
+        time.sleep(delay)
 
     def _cdp_click(self, element, description="element"):
         """Dispatch a trusted click via Chrome DevTools Protocol.
@@ -697,7 +718,7 @@ class LinkedInConnectBot:
             try:
                 self.driver.execute_script(
                     "arguments[0].scrollIntoView({block: 'center'});", target)
-                time.sleep(random.uniform(2, 5))
+                self._human_pause(2, 5)
 
                 self._robust_click(target, f"Connect control ({target_label})")
                 time.sleep(3)
@@ -718,7 +739,7 @@ class LinkedInConnectBot:
                     self.dismiss_open_modal()
                     self.wait_modal_closed(shadow, timeout=3)
                     self.connections_skipped += 1
-                    time.sleep(random.uniform(2, 4))
+                    self._human_pause(2, 4)
                     continue
 
                 if not name:
@@ -824,7 +845,7 @@ class LinkedInConnectBot:
                         f"failed={self.connections_failed}, "
                         f"skipped={self.connections_skipped}]")
 
-                time.sleep(random.uniform(8, 18))
+                self._human_pause(8, 18)
 
             except ElementClickInterceptedException:
                 logger.warning(f"Connect control for {target_label} was intercepted")
@@ -995,7 +1016,7 @@ class LinkedInConnectBot:
                     break
 
                 page_num += 1
-                time.sleep(random.uniform(12, 25))
+                self._human_pause(12, 25)
         except KeyboardInterrupt:
             # Swallowed here so the summary below still runs; main.py's
             # handler only covers interrupts outside this method.

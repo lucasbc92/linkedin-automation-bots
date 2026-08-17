@@ -1,0 +1,19 @@
+Hi, {name}, how are you?
+
+Thanks for accepting the connection! 😊 I know a recruiter's week is a busy one, so here's my context in a skimmable form — and I'm happy to help however I can.
+
+I've been a full stack developer for 7 years, focused on back-end Java + Spring Boot (where I enjoy working most) and front-end React/Angular in TypeScript. I'm exploring the market at my own pace, looking for a 100% remote role that's a step up in my career — my hours overlap the US working day, and I'm comfortable operating fully in English. 🏠
+
+What I tend to bring to a team:
+• Real scale: financial microservices handling millions of transactions a day at Magalu, plus the Vivo Valoriza refactor;
+• A "firefighter" streak: I'm the one called in to unblock critical production incidents without breaking everything else; 🧑‍🚒🔥
+• Speed with quality: AI-assisted development (Claude Code, Cursor) with Spec Driven Development, shortening cycles without giving up tests and review.
+
+If you have something remote that fits, I'd love to be considered. If the timing isn't right, keeping me on your radar for when a role opens helps a lot. And if you'd just like to trade notes on the market — or tell me what tends to weigh most in your screening — feel free to reach out: feedback from the other side of the table is worth its weight in gold. 🙌
+
+🔗 Bilingual HTML resume: https://lucasbc92.github.io/resume
+📄 Resume PDF: https://github.com/lucasbc92/resume/raw/refs/heads/main/resume_en.pdf
+📱 WhatsApp: https://wa.me/+5548991224064
+
+Best regards,
+Lucas

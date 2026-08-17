@@ -42,20 +42,38 @@ python main.py connect -r                    # page backwards (Previous instead 
 python main.py connect --max 80              # stop after 80 invitations sent
 python main.py connect --any-title           # invite every recruiter, not just tech
 python main.py connect --title-score 0.9     # stricter tech-recruiter filter
+python main.py connect -f                    # fast: minimal pauses between invites
 ```
 
 ### Options
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `-m`, `--message FILE` | `message.txt` | Template file in `connect/msg_templates/`. A bare filename is resolved against that folder; a path is used as-is. |
+| `-m`, `--message FILE` | `message.txt` | Template file in `connect/msg_templates/`. A bare filename is resolved against that folder; a path is used as-is. A file that doesn't exist stops the run (unless `-n` makes it moot). |
 | `-n`, `--no-message` | off | Send invitations **without** a note (clicks "Send without a note"). |
 | `-r`, `--reverse` | off | Navigate results in reverse (click **Previous** instead of **Next**). |
 | `-y`, `--yes` | off | Auto-continue past the "close to the weekly invitation limit" warning instead of prompting. |
 | `--max N` | unlimited | Stop after sending `N` invitations (blast-radius limit, independent of LinkedIn's own weekly cap). |
 | `--any-title` | off | Invite **every** recruiter, skipping the tech-recruiter headline filter. |
 | `--title-score S` | `0.80` | Minimum tech-recruiter similarity score (`0.0`–`1.0`). Raise it to be stricter, lower it to be more permissive. |
+| `-f`, `--fast` | off | Shrink the randomized pauses to a minimum — see [Pacing](#pacing). |
 | `-l`, `--log-level` | `DEBUG` | `DEBUG`, `INFO`, `WARN`, or `ERROR`. |
+
+## Pacing
+
+Between actions the bot waits a random interval, so the rhythm doesn't read as
+a script: 2–5 s before opening an invite modal, 8–18 s after each invitation,
+12–25 s between result pages.
+
+`-f` / `--fast` keeps the same randomness but scales every one of those windows
+to a tenth, with a 0.5 s floor (`FAST_PAUSE_FACTOR` / `MIN_FAST_PAUSE` in
+[`connect/bot.py`](bot.py)) — roughly 0.5 s, 0.8–1.8 s and 1.2–2.5 s. The floor
+is there because LinkedIn's UI still needs a moment to settle between clicks.
+
+Fixed waits that exist to let the page render (the modal opening, a page
+loading) are unaffected — `--fast` only touches the humanizing pauses. Use it
+for short or test runs; a full run at this pace is a much more obviously
+automated pattern, and LinkedIn's weekly invitation cap applies either way.
 
 ## Tech-recruiter filter
 

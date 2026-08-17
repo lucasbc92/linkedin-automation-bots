@@ -29,6 +29,7 @@ Shell tab-completion (one-time setup)
 import argparse
 import logging
 import os
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -76,6 +77,18 @@ def _resolve_template(filename, bot):
     return os.path.join(_template_root(bot), filename)
 
 
+def _require_template(path, flag, logger):
+    """Exit unless ``path`` exists.
+
+    MessageTemplates falls back to a generic "Hello {name}!" when a file is
+    missing, so without this a typo in a filename sends that text to real
+    contacts instead of stopping the run.
+    """
+    if not os.path.exists(path):
+        logger.error(f"Template '{path}' ({flag}) not found.")
+        sys.exit(1)
+
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -90,6 +103,7 @@ examples:
   python main.py connect --max 80                   # stop after 80 invitations sent
   python main.py connect --any-title                # invite every recruiter, not just tech
   python main.py connect --title-score 0.9          # stricter tech-recruiter filter
+  python main.py connect -f                         # fast: minimal pauses between invites
 
 by default only headlines that read as a *tech* recruiter are invited
 (scored by connect/tech_recruiter.py); templates live in:  connect/msg_templates/
@@ -106,8 +120,11 @@ examples:
   python main.py message -i -m reconnect_older.txt --date-limit 2024/10/20
       # click an old conversation first, then walk upward (older→newer),
       # stopping once a conversation is newer than the date limit
-  python main.py message --last-message-regex "You:.*" 
+  python main.py message --last-message-regex "You:.*"
       # only message conversations where your last message matches the regex
+  python main.py message --last-message-regex ".*há 7.*" --last-message-regex-custom ".*for 7.*" message_ingles.txt
+      # Portuguese previews get the -m template, English ones message_ingles.txt;
+      # everything matching neither regex is skipped
 
 templates live in:  message/msg_templates/
 """
@@ -164,6 +181,10 @@ def build_parser():
         help=f"Minimum tech-recruiter similarity score, 0.0-1.0 "
              f"(default: {DEFAULT_MIN_SCORE})")
     cp.add_argument(
+        "-f", "--fast", action="store_true",
+        help="Shrink the randomized pauses between invitations and pages to a "
+             "minimum (faster, but a more obviously automated pattern)")
+    cp.add_argument(
         "-l", "--log-level", default="DEBUG",
         choices=["DEBUG", "INFO", "WARN", "ERROR"],
         help="Log verbosity (default: DEBUG)")
@@ -203,7 +224,13 @@ def build_parser():
     mp.add_argument(
         "--last-message-regex", metavar="REGEX",
         help="Only message conversations whose last message preview matches "
-             "this regular expression")
+             "this regular expression (they get the -m template)")
+    mp.add_argument(
+        "--last-message-regex-custom", action="append", nargs=2, default=[],
+        metavar=("REGEX", "FILE"),
+        help="Send FILE instead of the -m template to conversations whose "
+             "last message matches REGEX. Repeatable; checked in order, "
+             "before --last-message-regex")
     mp.add_argument(
         "-l", "--log-level", default="DEBUG",
         choices=["DEBUG", "INFO", "WARN", "ERROR"],
@@ -239,6 +266,8 @@ def run_connect(args):
     logger = setup_logging(level=getattr(logging, level_name, logging.DEBUG), log_dir="connect/logs")
 
     message_file = _resolve_template(args.message, "connect")
+    if not args.no_message:
+        _require_template(message_file, "-m/--message", logger)
 
     logger.info("=" * 60)
     logger.info("LinkedIn Connect Bot")
@@ -249,6 +278,7 @@ def run_connect(args):
     logger.info(f"  Auto-cont  : {'on (-y)' if args.yes else 'off'}")
     logger.info(f"  Max invites: {args.max_invites or 'unlimited'}")
     logger.info(f"  Titles     : {'any recruiter (--any-title)' if args.any_title else f'tech recruiters only (score >= {args.title_score:.2f})'}")
+    logger.info(f"  Pacing     : {'fast (-f)' if args.fast else 'humanized'}")
     logger.info(f"  Log level  : {args.log_level}")
     logger.info("=" * 60)
 
@@ -261,6 +291,7 @@ def run_connect(args):
         max_invites=args.max_invites,
         tech_only=not args.any_title,
         min_title_score=args.title_score,
+        fast=args.fast,
     )
     try:
         bot.run_automation(max_pages=100)
@@ -275,6 +306,7 @@ def run_message(args):
     logger = setup_logging(level=getattr(logging, level_name, logging.DEBUG), log_dir="message/logs")
 
     message_file = _resolve_template(args.message, "message")
+    _require_template(message_file, "-m/--message", logger)
 
     def parse_cli_date(value, flag):
         if not value:
@@ -289,6 +321,26 @@ def run_message(args):
     date_limit = parse_cli_date(args.date_limit, "--date-limit")
     start_date = parse_cli_date(args.start_date, "--start-date")
 
+    def check_regex(pattern, flag):
+        if pattern is None:
+            return
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            logger.error(f"Invalid regex for {flag}: {pattern!r} ({e})")
+            sys.exit(1)
+
+    check_regex(args.last_message_regex, "--last-message-regex")
+
+    # (regex, template path) pairs — resolved and validated here so a typo in
+    # a filename stops the run instead of silently sending the fallback text.
+    regex_templates = []
+    for pattern, filename in args.last_message_regex_custom:
+        check_regex(pattern, "--last-message-regex-custom")
+        path = _resolve_template(filename, "message")
+        _require_template(path, "--last-message-regex-custom", logger)
+        regex_templates.append((pattern, path))
+
     logger.info("=" * 60)
     logger.info("LinkedIn Message Bot")
     logger.info(f"  Message    : {message_file}")
@@ -298,6 +350,8 @@ def run_message(args):
     logger.info(f"  Dry run    : {'yes' if args.dry_run else 'no'}")
     logger.info(f"  Max msgs   : {args.max_messages or 'unlimited'}")
     logger.info(f"  Last msg regex: {args.last_message_regex or 'none'}")
+    for pattern, path in regex_templates:
+        logger.info(f"  Custom rule: {pattern!r} -> {path}")
     logger.info(f"  Log level  : {args.log_level}")
     logger.info("=" * 60)
 
@@ -310,6 +364,7 @@ def run_message(args):
         max_messages=args.max_messages,
         inv=args.inv,
         last_message_regex=args.last_message_regex,
+        regex_templates=regex_templates,
     )
     try:
         bot.run()

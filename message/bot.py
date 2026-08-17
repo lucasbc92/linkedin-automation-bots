@@ -3,6 +3,7 @@ import random
 import re
 import time
 from datetime import date, timedelta
+from pathlib import Path
 
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
@@ -129,7 +130,8 @@ def first_card_on_or_before(timestamps, target, today=None):
 class LinkedInMessageBot:
     def __init__(self, message_file="message/msg_templates/message.txt",
                  date_limit=None, start_date=None, dry_run=False,
-                 max_messages=None, inv=False, last_message_regex=None):
+                 max_messages=None, inv=False, last_message_regex=None,
+                 regex_templates=None):
         """
         Args:
             message_file: Path to the template file.
@@ -145,9 +147,13 @@ class LinkedInMessageBot:
             inv: If True, walk the list upward (previous card, older→newer)
                  instead of downward, and flip ``date_limit`` to mean "stop
                  once a card is newer than this".
-            last_message_regex: Regular expression string; only conversations
-                                whose last message preview matches will be
-                                messaged. ``None`` → no filtering by last message.
+            last_message_regex: Regular expression string; conversations whose
+                                last message preview matches get ``message_file``.
+                                ``None`` → no filtering by last message.
+            regex_templates: Iterable of ``(regex, template_file)`` pairs; a
+                             conversation whose last message matches ``regex``
+                             gets that template instead of ``message_file``.
+                             Checked in order, before ``last_message_regex``.
         """
         self.date_limit = date_limit
         self.start_date = start_date
@@ -164,6 +170,13 @@ class LinkedInMessageBot:
         self.short_wait = WebDriverWait(self.driver, 3)
 
         self._msg = MessageTemplates(message_file)
+        self._msg_source = Path(message_file).name
+        # (compiled regex, templates, template name) — loaded up front so a
+        # bad pattern or path fails before the first thread is opened.
+        self._rules = [
+            (re.compile(pattern), MessageTemplates(path), Path(path).name)
+            for pattern, path in (regex_templates or [])
+        ]
 
         self.sent = 0
         self.failed = 0
@@ -367,6 +380,42 @@ class LinkedInMessageBot:
             return el.text.strip()
         except Exception:
             return None
+
+    def _templates_for(self, last_message):
+        """Pick the template for a card from its last-message preview.
+
+        Returns ``(templates, source, pattern)`` — the ``MessageTemplates`` to
+        send, the template's filename and the regex that selected it — or
+        ``(None, None, None)`` when no rule matches and the card must be
+        skipped. With no regex rules configured at all, every card gets the
+        default template.
+
+        Custom ``(regex, template)`` rules are checked first, in the order
+        given; ``--last-message-regex`` is the fallback, since it carries no
+        template of its own.
+        """
+        if not self._rules and self.last_message_regex is None:
+            return self._msg, self._msg_source, None
+
+        if last_message is None:
+            return None, None, None
+
+        for pattern, templates, source in self._rules:
+            if pattern.search(last_message):
+                return templates, source, pattern.pattern
+
+        if (self.last_message_regex is not None
+                and self.last_message_regex.search(last_message)):
+            return self._msg, self._msg_source, self.last_message_regex.pattern
+
+        return None, None, None
+
+    def _rule_patterns(self):
+        """Every configured last-message pattern, in evaluation order."""
+        patterns = [p.pattern for p, _, _ in self._rules]
+        if self.last_message_regex is not None:
+            patterns.append(self.last_message_regex.pattern)
+        return patterns
 
     def _scroll_list_bottom(self):
         """Scroll the conversation list container to trigger lazy-loading."""
@@ -735,8 +784,9 @@ class LinkedInMessageBot:
                             f"is before date limit {self.date_limit}. Stopping.")
                         break
 
-                # --- decide whether this card gets a message ---
+                # --- decide whether this card gets a message, and which one ---
                 skip_reason = None
+                templates, source, matched = self._msg, self._msg_source, None
                 if not name_full:
                     skip_reason = "card has no readable name"
                 else:
@@ -747,12 +797,14 @@ class LinkedInMessageBot:
                         skip_reason = "already handled in this run"
                     elif name_full in history:
                         skip_reason = "already messaged in a previous run"
-                    elif self.last_message_regex is not None:
-                        last_msg = self._card_last_message(current)
-                        if last_msg is None or not self.last_message_regex.search(last_msg):
+                    else:
+                        templates, source, matched = self._templates_for(
+                            self._card_last_message(current))
+                        if templates is None:
+                            patterns = ", ".join(
+                                f"'{p}'" for p in self._rule_patterns())
                             skip_reason = (
-                                f"last message does not match regex "
-                                f"'{self.last_message_regex.pattern}'")
+                                f"last message matches no regex ({patterns})")
 
                 if skip_reason:
                     logger.info(
@@ -763,11 +815,17 @@ class LinkedInMessageBot:
                     continue
 
                 handled.add(name_full)
-                message = self._msg.personalize(display_first_name(name_full))
+                message = templates.personalize(display_first_name(name_full))
+                if matched:
+                    logger.info(
+                        f"{name_full}: last message matches '{matched}' "
+                        f"→ using {source}")
 
                 if self.dry_run:
                     first_line = message.splitlines()[0] if message else ""
-                    logger.info(f"[DRY-RUN] Would send to {name_full}: {first_line}")
+                    logger.info(
+                        f"[DRY-RUN] Would send to {name_full} "
+                        f"({source}): {first_line}")
                     current = self._advance(current)
                     continue
 
