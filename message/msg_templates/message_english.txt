@@ -1,0 +1,14 @@
+Hi, {name}, how are you?
+
+Thanks for accepting the connection! 😊 Quick context, I'll keep it short.
+
+I've been a full stack developer for 7 years: back-end Java + Spring Boot (where I enjoy working most) and front-end React/Angular. At a major Brazilian e-commerce I worked on financial microservices handling millions of transactions a day, and these days I ship faster with AI-assisted development (Claude Code) and Spec Driven Development.
+
+I'm exploring the market at my own pace, looking for a 100% remote role — I'm based in Brazil, with hours that overlap the US working day. If something fits, I'd love to be considered; if the timing isn't right, keeping me on your radar helps a lot. Happy to just trade notes, too!
+
+🔗 Resume: https://lucasbc92.github.io/resume
+📄 PDF: https://github.com/lucasbc92/resume/raw/refs/heads/main/resume_en.pdf
+📱 WhatsApp: https://wa.me/+5548991224064
+
+Best regards,
+Lucas

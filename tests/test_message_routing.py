@@ -53,10 +53,10 @@ class TemplateRoutingTest(unittest.TestCase):
     def test_custom_rule_picks_its_own_template(self):
         """The flag combination from the feature request."""
         bot = _make_bot(default_regex=r".*há 7.*",
-                        rules=[(r".*for 7.*", "message_ingles.txt")])
+                        rules=[(r".*for 7.*", "message_english.txt")])
 
         self.assertEqual(bot._templates_for("You: for 7 years")[1],
-                         "message_ingles.txt")
+                         "message_english.txt")
         self.assertEqual(bot._templates_for("Você: há 7 anos")[1],
                          "message.txt")
         self.assertIsNone(bot._templates_for("You: thanks!")[0])
@@ -71,9 +71,9 @@ class TemplateRoutingTest(unittest.TestCase):
 
     def test_custom_rules_alone_skip_everything_else(self):
         """No --last-message-regex: only the custom patterns get messaged."""
-        bot = _make_bot(rules=[(r".*for 7.*", "message_ingles.txt")])
+        bot = _make_bot(rules=[(r".*for 7.*", "message_english.txt")])
         self.assertEqual(bot._templates_for("You: for 7 years")[1],
-                         "message_ingles.txt")
+                         "message_english.txt")
         self.assertIsNone(bot._templates_for("Você: há 7 anos")[0])
 
     def test_unreadable_preview_is_skipped_when_rules_exist(self):
@@ -82,7 +82,7 @@ class TemplateRoutingTest(unittest.TestCase):
 
     def test_matched_pattern_is_reported_for_logging(self):
         bot = _make_bot(default_regex=r".*há 7.*",
-                        rules=[(r".*for 7.*", "message_ingles.txt")])
+                        rules=[(r".*for 7.*", "message_english.txt")])
         self.assertEqual(bot._templates_for("You: for 7 years")[2], ".*for 7.*")
         self.assertEqual(bot._templates_for("Você: há 7 anos")[2], ".*há 7.*")
 
@@ -162,16 +162,16 @@ class RunLoopRoutingTest(unittest.TestCase):
              _Card("John Doe", "You: for 7 years"),
              _Card("No Match", "You: thanks!")],
             default_regex=r".*há 7.*",
-            rules=[(r".*for 7.*", "message_ingles.txt")])
+            rules=[(r".*for 7.*", "message_english.txt")])
 
         self.assertIn("Would send to Ana Silva (message.txt)", output)
-        self.assertIn("Would send to John Doe (message_ingles.txt)", output)
+        self.assertIn("Would send to John Doe (message_english.txt)", output)
         self.assertIn("Skipping No Match — last message matches no regex", output)
 
     def test_english_contact_gets_english_body(self):
         output = self._run(
             [_Card("John Doe", "You: for 7 years")],
-            rules=[(r".*for 7.*", "message_ingles.txt")])
+            rules=[(r".*for 7.*", "message_english.txt")])
         self.assertIn("Hi, John, how are you?", output)
         self.assertNotIn("Oi, John", output)
 
@@ -186,12 +186,12 @@ class CliWiringTest(unittest.TestCase):
         args = parser.parse_args([
             "message",
             "--last-message-regex", ".*há 7.*",
-            "--last-message-regex-custom", ".*for 7.*", "message_ingles.txt",
+            "--last-message-regex-custom", ".*for 7.*", "message_english.txt",
             "--last-message-regex-custom", ".*hace 7.*", "message_es.txt",
         ])
         self.assertEqual(args.last_message_regex, ".*há 7.*")
         self.assertEqual(args.last_message_regex_custom,
-                         [[".*for 7.*", "message_ingles.txt"],
+                         [[".*for 7.*", "message_english.txt"],
                           [".*hace 7.*", "message_es.txt"]])
 
     def test_a_missing_template_stops_the_run(self):
@@ -206,7 +206,7 @@ class CliWiringTest(unittest.TestCase):
         self.assertIn("nope.txt", logs.output[0])
 
         # An existing one passes through silently.
-        _require_template(str(TEMPLATES / "message_ingles.txt"),
+        _require_template(str(TEMPLATES / "message_english.txt"),
                           "-m/--message", logger)
 
 

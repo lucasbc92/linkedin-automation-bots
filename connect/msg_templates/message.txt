@@ -1,4 +1,7 @@
-Oi, {name}! Tudo bem?
-Dev full stack há 7 anos, forte em Java/Spring Boot e React/Angular. Na Magalu, microsserviços financeiros com milhões de transações/dia; entrego mais rápido com agentes de IA.
-Aberto a vagas remotas e a trocar ideia com quem contrata tech 😊
+Oi, {name}! Tudo bem? 😊
+Dev full stack há 7 anos, forte em Java/Spring Boot e React/Angular.
+Na Magalu, microsserviços financeiros com milhões de transações/dia.
+Entrego mais rápido e seguro com agentes de IA (Claude Code).
+
+Aberto a vagas remotas ou portuguesas! 
 Abs, Lucas

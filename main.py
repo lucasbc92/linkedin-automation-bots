@@ -96,7 +96,7 @@ def _require_template(path, flag, logger):
 _CONNECT_EPILOG = """
 examples:
   python main.py connect
-  python main.py connect -m message_formal.txt
+  python main.py connect -m message_english.txt
   python main.py connect -n                         # no note
   python main.py connect -y -l INFO                 # auto-continue, less verbose
   python main.py connect -r                         # navigate in reverse (Previous)
@@ -116,14 +116,14 @@ examples:
   python main.py message --max 10
   python main.py message --date-limit 2025/12/31
   python main.py message --start-date 2025/07/30
-  python main.py message -m message_v2.txt --max 5 --dry-run
+  python main.py message -m message_extended.txt --max 5 --dry-run
   python main.py message -i -m reconnect_older.txt --date-limit 2024/10/20
       # click an old conversation first, then walk upward (older→newer),
       # stopping once a conversation is newer than the date limit
   python main.py message --last-message-regex "You:.*"
       # only message conversations where your last message matches the regex
-  python main.py message --last-message-regex ".*há 7.*" --last-message-regex-custom ".*for 7.*" message_ingles.txt
-      # Portuguese previews get the -m template, English ones message_ingles.txt;
+  python main.py message --last-message-regex ".*há 7.*" --last-message-regex-custom ".*for 7.*" message_english.txt
+      # Portuguese previews get the -m template, English ones message_english.txt;
       # everything matching neither regex is skipped
 
 templates live in:  message/msg_templates/

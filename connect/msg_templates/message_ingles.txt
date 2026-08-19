@@ -1,4 +1,0 @@
-Hi, {name}! 😊
-I've been a full stack dev for 7 years, strongest in Java/Spring Boot with React/Angular — financial microservices handling millions of transactions a day.
-Open to remote roles overlapping US hours, and always glad to meet people hiring in tech.
-Lucas

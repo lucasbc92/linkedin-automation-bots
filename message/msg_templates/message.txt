@@ -1,18 +1,13 @@
 Oi, {name}, tudo bem?
 
-Obrigado por aceitar a conexão! 😊 Sei que a rotina de recrutamento é corrida, então deixo meu contexto de forma objetiva — e fico à disposição no que precisar.
+Obrigado por aceitar a conexão! 😊 Deixo meu contexto rapidinho, prometo ser breve.
 
-Sou desenvolvedor full stack há 7 anos, com foco em back-end Java + Spring Boot (onde mais gosto de atuar) e front-end React/Angular em TypeScript. Sigo sondando o mercado com calma, atrás de uma oportunidade 100% remota que seja um passo acima na carreira. 🏠
+Sou dev full stack há 7 anos: back-end Java + Spring Boot (onde mais gosto de atuar) e front-end React/Angular. No Magalu, microsserviços financeiros com milhões de transações por dia — e hoje entrego mais rápido com agentes de IA (Claude Code) e Spec Driven Development.
 
-O que costumo levar para o time:
-• Escala de verdade: microsserviços financeiros com milhões de transações por dia no Magalu, além da refatoração do Vivo Valoriza;
-• Perfil de "bombeiro": sou quem chamam para destravar incidente crítico em produção sem derrubar o resto; 🧑‍🚒🔥
-• Velocidade com qualidade: desenvolvimento assistido por IA (Claude Code, Cursor) com Spec Driven Development, encurtando ciclos sem abrir mão de teste e revisão.
+Sigo sondando o mercado com calma, atrás de uma vaga 100% remota. Se tiver algo alinhado, adoraria participar; se não for o momento, já ajuda muito me deixar no radar. E se quiser só trocar uma ideia, é só chamar!
 
-Se tiver algo remoto alinhado a esse perfil, adoraria entrar no processo. Se não for o momento, já ajuda muito me deixar no radar para quando abrir. E se quiser só trocar uma ideia sobre o mercado — ou me dizer o que costuma pesar na sua triagem —, é só chamar: feedback de quem está do outro lado da mesa vale ouro. 🙌
-
-🔗 Currículo HTML bilíngue: https://lucasbc92.github.io/resume
-📄 Currículo PDF: https://github.com/lucasbc92/resume/raw/refs/heads/main/resume_ptbr.pdf
+🔗 Currículo: https://lucasbc92.github.io/resume
+📄 PDF: https://github.com/lucasbc92/resume/raw/refs/heads/main/resume_ptbr.pdf
 📱 WhatsApp: https://wa.me/+5548991224064
 
 Um abraço,

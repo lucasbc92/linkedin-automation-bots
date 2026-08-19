@@ -38,6 +38,16 @@ The message text comes from a template in [`message/msg_templates/`](../message/
 direct messages have **no 300-character cap**, so templates are never truncated.
 See [Templates](../README.md#templates) in the root README for the format.
 
+The follow-up after an accepted invitation comes in two lengths per language —
+short by default, long when you want the full case:
+
+| Template | Language | Length |
+|----------|----------|--------|
+| `message.txt` (default) | Portuguese | short |
+| `message_english.txt` | English | short |
+| `message_extended.txt` | Portuguese | long (bullets: scale, incidents, AI-assisted delivery) |
+| `message_english_extended.txt` | English | long |
+
 ## Usage
 
 ```bash
@@ -51,8 +61,8 @@ python main.py message -i -m reconnect_older.txt --date-limit 2024/10/20
     # click an old conversation first, then walk upward (older→newer),
     # stopping once a conversation is newer than the date limit
 python main.py message --last-message-regex ".*há 7.*" \
-    --last-message-regex-custom ".*for 7.*" message_ingles.txt
-    # Portuguese previews get message.txt, English ones message_ingles.txt
+    --last-message-regex-custom ".*for 7.*" message_english.txt
+    # Portuguese previews get message.txt, English ones message_english.txt
 ```
 
 ### Options
@@ -81,11 +91,11 @@ can decide **whether** a card gets messaged and **which** template it gets.
 
 ```bash
 python main.py message --last-message-regex ".*há 7.*" \
-    --last-message-regex-custom ".*for 7.*" message_ingles.txt
+    --last-message-regex-custom ".*for 7.*" message_english.txt
 ```
 
 That run messages a contact whose preview says "há 7 anos" with `message.txt`,
-one whose preview says "for 7 years" with `message_ingles.txt`, and skips
+one whose preview says "for 7 years" with `message_english.txt`, and skips
 everyone else — a way to answer in whichever language the thread is already in.
 
 Rules are evaluated **in order: the custom ones first (in the order given),

@@ -100,15 +100,16 @@ Both bots read their message text from plain-text template files, so you can
 edit wording without touching code.
 
 ```
-connect/msg_templates/   # used by `python main.py connect`
-├── message.txt          (default)
-├── message_formal.txt
-├── message_objetiva.txt
-└── … other variants
+connect/msg_templates/            # used by `python main.py connect`
+├── message.txt                   (default, Portuguese)
+└── message_english.txt
 
-message/msg_templates/   # used by `python main.py message`
-├── message.txt          (default)
-└── reconnect.txt
+message/msg_templates/            # used by `python main.py message`
+├── message.txt                   (default, Portuguese)
+├── message_english.txt
+├── message_extended.txt          (long version of each)
+├── message_english_extended.txt
+└── reconnect*.txt                (re-approaching old contacts)
 ```
 
 **Format** (handled by [`common/messages.py`](common/messages.py)):

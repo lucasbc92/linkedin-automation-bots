@@ -35,7 +35,7 @@ The message text comes from a template in [`connect/msg_templates/`](../connect/
 
 ```bash
 python main.py connect                       # default template, personalized note
-python main.py connect -m message_formal.txt # pick a specific template
+python main.py connect -m message_english.txt # invite in English
 python main.py connect -n                    # send invitations with no note
 python main.py connect -y -l INFO            # auto-continue past the warning, quieter
 python main.py connect -r                    # page backwards (Previous instead of Next)
