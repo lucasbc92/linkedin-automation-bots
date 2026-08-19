@@ -1,4 +1,4 @@
-Hi, {name}, how are you?
+Hello, {name}, how are you?
 
 Thanks for accepting the connection! 😊 Quick context, I'll keep it short.
 

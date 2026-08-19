@@ -172,7 +172,7 @@ class RunLoopRoutingTest(unittest.TestCase):
         output = self._run(
             [_Card("John Doe", "You: for 7 years")],
             rules=[(r".*for 7.*", "message_english.txt")])
-        self.assertIn("Hi, John, how are you?", output)
+        self.assertIn("Hello, John, how are you?", output)
         self.assertNotIn("Oi, John", output)
 
 
