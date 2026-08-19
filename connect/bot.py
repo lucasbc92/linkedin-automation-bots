@@ -6,12 +6,12 @@ import time
 
 from selenium.common.exceptions import (ElementClickInterceptedException,
                                         NoSuchElementException, TimeoutException)
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from common.browser import create_driver
+from common.clicking import ClickMixin
 from common.logging_setup import current_week_start
 from common.messages import MessageTemplates
 from common.names import display_first_name
@@ -35,7 +35,7 @@ FAST_PAUSE_FACTOR = 0.1
 MIN_FAST_PAUSE = 0.5
 
 
-class LinkedInConnectBot:
+class LinkedInConnectBot(ClickMixin):
     def __init__(self, auto_continue=False,
                  message_file="connect/msg_templates/message.txt",
                  reverse=False, no_message=False, max_invites=None,
@@ -74,59 +74,6 @@ class LinkedInConnectBot:
         delay = self._pause_seconds(low, high)
         logger.debug(f"Pausing {delay:.1f}s{' (fast)' if self.fast else ''}")
         time.sleep(delay)
-
-    def _cdp_click(self, element, description="element"):
-        """Dispatch a trusted click via Chrome DevTools Protocol.
-
-        Produces isTrusted=true events and works inside shadow DOM where
-        ActionChains can fail to compute correct coordinates.
-        """
-        try:
-            loc = element.location
-            sz = element.size
-            x = loc['x'] + sz['width'] / 2
-            y = loc['y'] + sz['height'] / 2
-            params = {"button": "left", "clickCount": 1, "modifiers": 0, "x": x, "y": y}
-            self.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {**params, "type": "mousePressed"})
-            time.sleep(0.05)
-            self.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {**params, "type": "mouseReleased"})
-            logger.debug(f"CDP click OK on {description} at ({x:.0f},{y:.0f})")
-            return True
-        except Exception as e:
-            logger.debug(f"CDP click failed on {description}: {type(e).__name__}: {e}")
-            return False
-
-    def _robust_click(self, element, description="element"):
-        """Click with a trusted event: native → ActionChains → CDP → JS fallback."""
-        try:
-            element.click()
-            logger.debug(f"Native click OK on {description}")
-            return True
-        except Exception as e:
-            logger.debug(f"Native click failed on {description} ({type(e).__name__}: {e}); trying ActionChains")
-
-        try:
-            try:
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({block: 'center'});", element)
-            except Exception:
-                pass
-            ActionChains(self.driver).move_to_element(element).pause(0.1).click().perform()
-            logger.debug(f"ActionChains click OK on {description}")
-            return True
-        except Exception as e:
-            logger.debug(f"ActionChains failed on {description} ({type(e).__name__}: {e}); trying CDP click")
-
-        if self._cdp_click(element, description):
-            return True
-
-        logger.warning(f"All trusted clicks failed on {description}; falling back to JS click - LinkedIn may ignore it")
-        try:
-            self.driver.execute_script("arguments[0].click();", element)
-            return True
-        except Exception as e:
-            logger.warning(f"All click methods failed on {description}: {e}")
-            return False
 
     def fill_message_box(self, message_box, text):
         """Type the note into the modal textarea so LinkedIn registers it and enables Send.

@@ -6,13 +6,13 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from common.browser import create_driver
+from common.clicking import ClickMixin
 from common.messages import MessageTemplates
 from common.names import display_first_name
 from common.sleep import allow_sleep, prevent_sleep
@@ -127,7 +127,7 @@ def first_card_on_or_before(timestamps, target, today=None):
     return None
 
 
-class LinkedInMessageBot:
+class LinkedInMessageBot(ClickMixin):
     def __init__(self, message_file="message/msg_templates/message.txt",
                  date_limit=None, start_date=None, dry_run=False,
                  max_messages=None, inv=False, last_message_regex=None,
@@ -181,60 +181,6 @@ class LinkedInMessageBot:
         self.sent = 0
         self.failed = 0
         self.skipped = 0
-
-    # ------------------------------------------------------------------
-    # Click helpers (mirrors connect/bot.py pattern)
-    # ------------------------------------------------------------------
-
-    def _cdp_click(self, element, description="element"):
-        try:
-            loc = element.location
-            sz = element.size
-            x = loc['x'] + sz['width'] / 2
-            y = loc['y'] + sz['height'] / 2
-            params = {"button": "left", "clickCount": 1, "modifiers": 0,
-                      "x": x, "y": y}
-            self.driver.execute_cdp_cmd(
-                "Input.dispatchMouseEvent", {**params, "type": "mousePressed"})
-            time.sleep(0.1)
-            self.driver.execute_cdp_cmd(
-                "Input.dispatchMouseEvent", {**params, "type": "mouseReleased"})
-            logger.debug(f"CDP click OK on {description} at ({x:.0f},{y:.0f})")
-            return True
-        except Exception as e:
-            logger.debug(f"CDP click failed on {description}: {type(e).__name__}: {e}")
-            return False
-
-    def _robust_click(self, element, description="element"):
-        try:
-            element.click()
-            logger.debug(f"Native click OK on {description}")
-            return True
-        except Exception as e:
-            logger.debug(f"Native click failed on {description} ({type(e).__name__}); trying ActionChains")
-
-        try:
-            try:
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({block: 'center'});", element)
-            except Exception:
-                pass
-            ActionChains(self.driver).move_to_element(element).pause(0.1).click().perform()
-            logger.debug(f"ActionChains click OK on {description}")
-            return True
-        except Exception as e:
-            logger.debug(f"ActionChains failed ({type(e).__name__}); trying CDP")
-
-        if self._cdp_click(element, description):
-            return True
-
-        logger.warning(f"All trusted clicks failed on {description}; falling back to JS")
-        try:
-            self.driver.execute_script("arguments[0].click();", element)
-            return True
-        except Exception as e:
-            logger.warning(f"All click methods failed on {description}: {e}")
-            return False
 
     # ------------------------------------------------------------------
     # Compose-box helpers
