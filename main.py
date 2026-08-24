@@ -4,6 +4,7 @@ Usage
 -----
   python main.py connect [options]   Send connection requests
   python main.py message [options]   Send follow-up messages
+  python main.py withdraw [options]  Withdraw old sent invitations
 
 Shell tab-completion (one-time setup)
 --------------------------------------
@@ -129,6 +130,40 @@ examples:
 templates live in:  message/msg_templates/
 """
 
+_WITHDRAW_EPILOG = """
+examples:
+  python main.py withdraw --until 2m --dry-run
+      # everything sent 2+ months ago, listed but not clicked
+  python main.py withdraw --until 2026/05/01 --dry-run
+      # same, with an absolute cutoff date
+  python main.py withdraw --until 2026/05/01
+      # withdraw every invitation sent on or before that date, oldest first
+  python main.py withdraw --until 1m --max 200 -y
+      # load only the 200 newest invitations, withdraw the 1-month-old ones
+      # among them, and skip the confirmation prompt
+  python main.py withdraw --until 1m --rolling --max 200
+      # start from what is on screen, withdraw everything past 1 month,
+      # load a couple more pages, repeat — down to the oldest invitation
+  python main.py withdraw
+      # no --until: just load the list and report how far back it reaches
+  python main.py withdraw --probe
+      # print which tab, selectors and buttons the bot can see, then exit
+
+by default the list loads all the way to the oldest invitation, then
+withdrawal walks upward from there and stops at the first invitation newer
+than --until; --max bounds the loading instead, so only that many cards are
+ever in the page and withdrawal picks its targets from those
+
+--rolling turns that around: it withdraws whatever is already loaded and past
+the cutoff, loads two more pages, and repeats until the list ends — so the
+page never holds more than a few pages at a time. Scroll down to the first
+invitation past the cutoff by hand and it picks up from there
+
+cards show relative ages ("Sent 3 months ago"), which LinkedIn rounds down,
+so an invitation is withdrawn only when its *newest possible* date is already
+past --until; ambiguous cards are left alone
+"""
+
 _STATS_EPILOG = """
 examples:
   python main.py stats                # invitations sent per week
@@ -235,6 +270,59 @@ def build_parser():
         "-l", "--log-level", default="DEBUG",
         choices=["DEBUG", "INFO", "WARN", "ERROR"],
         help="Log verbosity (default: DEBUG)")
+
+    # ---- withdraw ----
+    wp = sub.add_parser(
+        "withdraw",
+        help="Withdraw sent invitations older than a given date",
+        description="Load the sent-invitation manager back to a cutoff date "
+                    "and withdraw every invitation older than it, oldest "
+                    "first.",
+        epilog=_WITHDRAW_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    wp.add_argument(
+        "--until", metavar="DATE|AGE",
+        help="Withdraw invitations sent on or before this date (2026/06/20) "
+             "or this far back from today (2m, 3w, 10d, 1y). Omit to only "
+             "load the list and report how far back it goes")
+    wp.add_argument(
+        "--max", dest="max_cards", type=int, metavar="N",
+        help="Load at most N invitations, then withdraw the ones among them "
+             "older than --until. Caps the loading phase so the page stays "
+             "light; --max-clicks bounds it in page loads instead. With "
+             "--rolling it is the ceiling the page is topped back up to")
+    wp.add_argument(
+        "--rolling", action="store_true",
+        help="Withdraw as the list loads: start from what is on screen, "
+             "withdraw everything past --until, load two more pages, repeat "
+             "down to the oldest — instead of expanding the list first")
+    wp.add_argument(
+        "--dry-run", action="store_true",
+        help="Preview what would be withdrawn — nothing is clicked")
+    wp.add_argument(
+        "-y", "--yes", action="store_true",
+        help="Skip the confirmation prompt before the first withdrawal")
+    wp.add_argument(
+        "--max-clicks", type=int, metavar="N",
+        help="Cap the 'Load more' clicks, with or without --until "
+             "(default: unlimited). With --rolling, where there is no single "
+             "expansion to cap, it sets the pages loaded per top-up "
+             "(default: 2)")
+    wp.add_argument(
+        "--no-js", action="store_true",
+        help="Skip the in-page load loop; drive every page with trusted clicks")
+    wp.add_argument(
+        "--stop-early", action="store_true",
+        help="Stop loading once --until is in view instead of expanding to "
+             "the true end of the list (cheaper, but the oldest never load)")
+    wp.add_argument(
+        "--probe", action="store_true",
+        help="Report what the page exposes (tabs, selectors, buttons) and exit")
+    wp.add_argument(
+        "-l", "--log-level", default="INFO",
+        choices=["DEBUG", "INFO", "WARN", "ERROR"],
+        help="Log verbosity (default: INFO)")
 
     # ---- stats ----
     sp = sub.add_parser(
@@ -374,6 +462,82 @@ def run_message(args):
         logger.error(f"Stopped due to error: {e}")
 
 
+def run_withdraw(args):
+    level_name = "WARNING" if args.log_level == "WARN" else args.log_level
+    logger = setup_logging(level=getattr(logging, level_name, logging.INFO),
+                           log_dir="withdraw/logs")
+
+    # Imported here, not at module scope: withdraw.bot pulls in selenium.
+    from withdraw.bot import parse_until
+
+    cutoff = None
+    if args.until:
+        try:
+            cutoff = parse_until(args.until)
+        except ValueError as e:
+            logger.error(f"Invalid --until: {e}")
+            sys.exit(1)
+    elif args.rolling:
+        logger.error(
+            "--rolling needs --until: it withdraws while it loads, so there "
+            "has to be a cutoff for each card to be measured against.")
+        sys.exit(1)
+
+    logger.info("=" * 60)
+    logger.info("LinkedIn Withdraw Bot")
+    logger.info(f"  Until      : "
+                f"{f'{cutoff}  (--until {args.until})' if cutoff else 'none (load only, no withdrawals)'}")
+    logger.info(f"  Dry run    : {'yes' if args.dry_run else 'no'}")
+    logger.info(f"  Page loader: {'trusted clicks' if args.no_js else 'in-page loop'}")
+    logger.info(f"  Max clicks : {args.max_clicks or 'unlimited'}")
+    if args.rolling:
+        depth = (f"as needed, {args.max_clicks or 2} page(s) at a time  "
+                 f"(--rolling)")
+        if args.max_cards:
+            depth += f", keeping ~{args.max_cards} in the page"
+    elif args.max_cards:
+        depth = f"at most {args.max_cards} invitation(s)  (--max)"
+    elif args.stop_early:
+        depth = "to the cutoff  (--stop-early)"
+    else:
+        depth = "to the end of the list"
+    logger.info(f"  Load depth : {depth}")
+    logger.info(f"  Log level  : {args.log_level}")
+    logger.info("=" * 60)
+
+    if args.rolling and args.stop_early:
+        logger.warning(
+            "--stop-early does nothing with --rolling: there is no up-front "
+            "expansion for it to cut short.")
+
+    from withdraw.bot import LinkedInWithdrawBot
+    bot = LinkedInWithdrawBot(
+        until=cutoff,
+        dry_run=args.dry_run,
+        max_cards=args.max_cards,
+        auto_continue=args.yes,
+        use_js=not args.no_js,
+        stop_early=args.stop_early,
+        max_clicks=args.max_clicks,
+        rolling=args.rolling,
+    )
+    try:
+        if args.probe:
+            bot.probe()
+        elif cutoff is None:
+            total = bot.scroll_to_end(max_clicks=args.max_clicks,
+                                      max_cards=args.max_cards,
+                                      use_js=not args.no_js)
+            print(f"\n{total} invitation(s) loaded. "
+                  f"Oldest: {bot.oldest_label() or 'unknown'}")
+        else:
+            bot.run()
+    except KeyboardInterrupt:
+        logger.warning("Stopped by user (Ctrl+C)")
+    except Exception as e:
+        logger.error(f"Stopped due to error: {e}")
+
+
 def run_stats(args):
     from common.logging_setup import current_week_start
     from connect.history import DEFAULT_INVITE_FILE, backfill_from_logs, weekly_counts
@@ -415,6 +579,8 @@ if __name__ == "__main__":
         run_connect(args)
     elif args.command == "message":
         run_message(args)
+    elif args.command == "withdraw":
+        run_withdraw(args)
     elif args.command == "stats":
         run_stats(args)
     else:
