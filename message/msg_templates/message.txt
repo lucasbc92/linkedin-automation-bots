@@ -1,4 +1,4 @@
-Oi, {name}, tudo bem?
+Olá, {name}, tudo bem?
 
 Obrigado por aceitar a conexão! 😊 Deixo meu contexto rapidinho, prometo ser breve.
 

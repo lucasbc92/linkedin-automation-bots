@@ -1,7 +1,7 @@
-Oi, {name}! Tudo bem? 😊
-Dev full stack há 7 anos, forte em Java/Spring Boot e React/Angular.
-Na Magalu, microsserviços financeiros com milhões de transações/dia.
-Entrego mais rápido e seguro com agentes de IA (Claude Code).
+Saudações, {name}! Tudo bem? 😊
+Sou Full Stack há 7 anos, forte em Java com Spring Boot e React/Angular.
+Cases: Financeiro (Magalu, reforma tributária), Agro (PariPassu) e Vivo Valoriza.
+Utilizo Claude Code, domino Spec-Driven Development.
 
-Aberto a vagas remotas ou portuguesas! 
-Abs, Lucas
+Aberto a vagas remotas!
+Abraço, Lucas.

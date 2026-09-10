@@ -1,5 +1,7 @@
-Hi, {name}! 😊
-I've been a Java full-stack dev for 7 years, strongest in Spring Boot with React/Angular.
-I did work with an e-commerce financial microservices handling millions of transactions a day.
-Open to remote roles from Brazil, and always glad to meet people hiring in tech.
+Hi, {name}! How are you? 😊
+I’m a Java full-stack developer for 7 years, working with Spring Boot and React or Angular.
+Biggest client: Magazine Luiza, 2nd e-commerce in Brazil (LuizaLabs).
+I apply Spec-Driven Development (SDD) with Claude Code.
+
+Open to remote jobs!
 Lucas.
