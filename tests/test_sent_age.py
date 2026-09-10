@@ -300,20 +300,20 @@ class LoadCapTest(unittest.TestCase):
         bot.chunks = []
         state = {"count": loaded}
 
-        def expand_in_page(max_clicks=None, max_cards=None, **kwargs):
-            bot.chunks.append({"max_clicks": max_clicks, "max_cards": max_cards})
-            clicks = 0
-            for _ in range(max_clicks):
+        def expand_in_page(max_pages=None, max_cards=None, **kwargs):
+            bot.chunks.append({"max_pages": max_pages, "max_cards": max_cards})
+            pages = 0
+            for _ in range(max_pages):
                 # The real in-page loop checks the cap before each page load.
                 if max_cards and state["count"] >= max_cards:
-                    return {"cards": state["count"], "clicks": clicks,
+                    return {"cards": state["count"], "pages": pages,
                             "reason": "cap"}
                 if state["count"] >= total:
-                    return {"cards": state["count"], "clicks": clicks,
+                    return {"cards": state["count"], "pages": pages,
                             "reason": "end"}
                 state["count"] += self.PAGE
-                clicks += 1
-            return {"cards": state["count"], "clicks": clicks,
+                pages += 1
+            return {"cards": state["count"], "pages": pages,
                     "reason": "chunk-done"}
 
         bot.open_sent_page = lambda: None
@@ -343,6 +343,49 @@ class LoadCapTest(unittest.TestCase):
         self.assertEqual(bot.scroll_to_end(), 500)
 
 
+class ScrollOnlyPageBudgetTest(unittest.TestCase):
+    """A page budget has to bound a list that loads without a button.
+
+    Some LinkedIn builds have no "Load more" at all: scrolling to the bottom
+    mounts the next page. Counting only clicks left those runs unbounded — a
+    two-page top-up walked a 969-invitation list to its end and took the
+    browser's memory with it.
+    """
+
+    PAGE = 10
+
+    def _bot(self, loaded=50, total=1000):
+        bot = object.__new__(LinkedInWithdrawBot)
+        bot.list_exhausted = False
+        state = {"count": loaded, "scrolls": 0}
+        bot.state = state
+
+        def wait_for_growth(previous, timeout=None):
+            # Scrolling alone mounts the next page — no button involved.
+            state["count"] = min(state["count"] + self.PAGE, total)
+            return state["count"]
+
+        bot.open_sent_page = lambda: None
+        bot.card_count = lambda: state["count"]
+        bot.oldest_label = lambda: None
+        bot.sent_labels = lambda: []
+        bot._scroll_list_bottom = lambda: state.update(
+            scrolls=state["scrolls"] + 1)
+        bot._find_load_more = lambda: None
+        bot._page_pause = lambda: None
+        bot._wait_for_growth = wait_for_growth
+        return bot
+
+    def test_scroll_loaded_pages_count_against_the_budget(self):
+        bot = self._bot()
+        self.assertEqual(bot.scroll_to_end(max_pages=2, use_js=False),
+                         50 + 2 * self.PAGE)
+
+    def test_the_card_cap_still_holds_without_a_button(self):
+        bot = self._bot()
+        self.assertLessEqual(bot.scroll_to_end(max_cards=80, use_js=False), 90)
+
+
 class RollingRunTest(unittest.TestCase):
     """--rolling: withdraw what is loaded, load two more pages, repeat.
 
@@ -363,7 +406,7 @@ class RollingRunTest(unittest.TestCase):
         bot.auto_continue = True
         bot.rolling = True
         bot.max_cards = None
-        bot.max_clicks = None
+        bot.max_pages = None
         bot.stop_early = False
         bot.use_js = True
         bot.withdrawn = bot.previewed = bot.failed = 0

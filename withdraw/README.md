@@ -77,7 +77,7 @@ python main.py withdraw --until 1m --rolling         # withdraw as it loads, dow
 | `--rolling` | Withdraw what is loaded and past `--until`, load two more pages, repeat down to the oldest — instead of expanding the list first. |
 | `--dry-run` | Log what would be withdrawn; click nothing. |
 | `-y`, `--yes` | Skip the confirmation prompt. |
-| `--max-clicks N` | Cap the "Load more" clicks — the same bound as `--max`, counted in page loads. With `--rolling`, the pages loaded per top-up (default 2). |
+| `--max-pages N` | Cap the pages loaded — the same bound as `--max`, counted in page loads rather than cards. A page counts whether it came from clicking "Load more" or from the list paging on scroll. With `--rolling`, the pages loaded per top-up (default 2). `--max-clicks` is accepted as an alias. |
 | `--no-js` | Drive every page with trusted clicks instead of the in-page loop. |
 | `--stop-early` | Stop loading at the cutoff instead of expanding to the end. No effect with `--rolling`, which never expands up front. |
 | `--probe` | Print which tab, selectors and buttons the bot can see, then exit. |

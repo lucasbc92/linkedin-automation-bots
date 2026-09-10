@@ -290,7 +290,7 @@ def build_parser():
         "--max", dest="max_cards", type=int, metavar="N",
         help="Load at most N invitations, then withdraw the ones among them "
              "older than --until. Caps the loading phase so the page stays "
-             "light; --max-clicks bounds it in page loads instead. With "
+             "light; --max-pages bounds it in page loads instead. With "
              "--rolling it is the ceiling the page is topped back up to")
     wp.add_argument(
         "--rolling", action="store_true",
@@ -304,11 +304,12 @@ def build_parser():
         "-y", "--yes", action="store_true",
         help="Skip the confirmation prompt before the first withdrawal")
     wp.add_argument(
-        "--max-clicks", type=int, metavar="N",
-        help="Cap the 'Load more' clicks, with or without --until "
-             "(default: unlimited). With --rolling, where there is no single "
-             "expansion to cap, it sets the pages loaded per top-up "
-             "(default: 2)")
+        "--max-pages", "--max-clicks", dest="max_pages", type=int, metavar="N",
+        help="Cap the pages loaded, with or without --until (default: "
+             "unlimited). A page counts whether it came from clicking 'Load "
+             "more' or from the list paging on scroll. With --rolling, where "
+             "there is no single expansion to cap, it sets the pages loaded "
+             "per top-up (default: 2)")
     wp.add_argument(
         "--no-js", action="store_true",
         help="Skip the in-page load loop; drive every page with trusted clicks")
@@ -489,9 +490,9 @@ def run_withdraw(args):
                 f"{f'{cutoff}  (--until {args.until})' if cutoff else 'none (load only, no withdrawals)'}")
     logger.info(f"  Dry run    : {'yes' if args.dry_run else 'no'}")
     logger.info(f"  Page loader: {'trusted clicks' if args.no_js else 'in-page loop'}")
-    logger.info(f"  Max clicks : {args.max_clicks or 'unlimited'}")
+    logger.info(f"  Max pages  : {args.max_pages or 'unlimited'}")
     if args.rolling:
-        depth = (f"as needed, {args.max_clicks or 2} page(s) at a time  "
+        depth = (f"as needed, {args.max_pages or 2} page(s) at a time  "
                  f"(--rolling)")
         if args.max_cards:
             depth += f", keeping ~{args.max_cards} in the page"
@@ -518,14 +519,14 @@ def run_withdraw(args):
         auto_continue=args.yes,
         use_js=not args.no_js,
         stop_early=args.stop_early,
-        max_clicks=args.max_clicks,
+        max_pages=args.max_pages,
         rolling=args.rolling,
     )
     try:
         if args.probe:
             bot.probe()
         elif cutoff is None:
-            total = bot.scroll_to_end(max_clicks=args.max_clicks,
+            total = bot.scroll_to_end(max_pages=args.max_pages,
                                       max_cards=args.max_cards,
                                       use_js=not args.no_js)
             print(f"\n{total} invitation(s) loaded. "

@@ -145,16 +145,21 @@ REMOVAL_TIMEOUT_SECONDS = 10
 # Gap between pages. Fast enough to walk ~1000 invitations, slow enough that
 # the page settles and the request rate stays unremarkable.
 PAGE_PAUSE_RANGE = (1.2, 2.4)
+# Every loading budget below is counted in *pages*, not in clicks: some
+# LinkedIn builds page on scroll alone, with no "Load more" button to click,
+# and a budget that only counted clicks would never be spent on those — which
+# is how a two-page top-up once expanded a 969-invitation list to its end.
+#
 # The in-page loader runs in chunks so the cutoff check stays in Python
 # between them, instead of the date logic being duplicated in JavaScript.
-JS_CHUNK_CLICKS = 10
+JS_CHUNK_PAGES = 10
 # …and a much smaller chunk when a stop condition is armed, so the loader
 # overshoots the cutoff by at most a page or two rather than a full chunk.
-JS_STOP_CHECK_CLICKS = 2
+JS_STOP_CHECK_PAGES = 2
 JS_PAUSE_MS = 700
 # Pages a rolling run loads per top-up. Small on purpose: withdrawal resumes
 # as soon as new invitations arrive, so the page never has to hold the list.
-ROLLING_CHUNK_CLICKS = 2
+ROLLING_CHUNK_PAGES = 2
 # Gap between withdrawals — these hit LinkedIn's API, so they pace slower.
 WITHDRAW_PAUSE_RANGE = (1.5, 3.0)
 
@@ -350,7 +355,7 @@ def targets_until(cards, cutoff, today=None):
 class LinkedInWithdrawBot(ClickMixin):
     def __init__(self, until=None, dry_run=False, max_cards=None,
                  auto_continue=False, use_js=True, stop_early=False,
-                 max_clicks=None, rolling=False):
+                 max_pages=None, rolling=False):
         """
         Args:
             until: ``date``; withdraw invitations sent on or before it.
@@ -370,9 +375,11 @@ class LinkedInWithdrawBot(ClickMixin):
             stop_early: Stop loading as soon as the cutoff is in view instead
                         of expanding to the true end of the list. Cheaper on
                         a long list, but the oldest invitations never load.
-            max_clicks: Hard cap on "Load more" clicks. Bounds the same
-                        phase as max_cards, counted in page loads rather
-                        than in cards; whichever is reached first stops it.
+            max_pages: Hard cap on pages loaded. Bounds the same phase as
+                       max_cards, counted in page loads rather than in
+                       cards; whichever is reached first stops it. A page
+                       counts whether it came from clicking "Load more" or
+                       from the list paging on scroll alone.
             rolling: Withdraw from what is already on the page, then load a
                      couple more pages and withdraw again, down to the oldest
                      invitation — instead of expanding the whole list first.
@@ -385,12 +392,13 @@ class LinkedInWithdrawBot(ClickMixin):
         self.auto_continue = auto_continue
         self.use_js = use_js
         self.stop_early = stop_early
-        self.max_clicks = max_clicks
+        self.max_pages = max_pages
         self.rolling = rolling
 
         self.driver, _ = create_driver(attach_to_existing=True)
         # Resolved against the live page on first use.
         self._card_sel = None
+        self._tab_logged = False
 
         self.withdrawn = 0
         self.previewed = 0
@@ -438,7 +446,11 @@ class LinkedInWithdrawBot(ClickMixin):
         chosen = invitation_manager or any_linkedin
         if chosen is not None:
             self.driver.switch_to.window(chosen)
-            logger.info(f"Using tab: {self.driver.current_url}")
+            # A rolling run comes back here on every top-up; saying it once is
+            # informative, saying it forty times buries the withdrawals.
+            log = logger.debug if self._tab_logged else logger.info
+            log(f"Using tab: {self.driver.current_url}")
+            self._tab_logged = True
             return invitation_manager is not None
 
         logger.warning("No LinkedIn tab found. Using the current tab.")
@@ -682,7 +694,7 @@ class LinkedInWithdrawBot(ClickMixin):
     def _page_pause(self):
         time.sleep(random.uniform(*PAGE_PAUSE_RANGE))
 
-    def expand_in_page(self, max_clicks=JS_CHUNK_CLICKS, max_cards=None,
+    def expand_in_page(self, max_pages=JS_CHUNK_PAGES, max_cards=None,
                        pause_ms=JS_PAUSE_MS,
                        growth_timeout_ms=GROWTH_TIMEOUT_SECONDS * 1000):
         """Run the load-more loop inside the page, in one round-trip.
@@ -708,14 +720,19 @@ class LinkedInWithdrawBot(ClickMixin):
         ``max_cards`` is checked in the browser, before each page load, so
         a card cap stops mid-chunk instead of overshooting by the rest of it.
 
-        Returns ``{"cards": n, "clicks": n, "scrolls": n, "reason": …}``, or
+        ``max_pages`` counts pages that actually arrived, from a click or
+        from scrolling — the loop below spends its budget on growth, not on
+        button presses, because a build that pages on scroll alone never
+        presses one.
+
+        Returns ``{"cards": n, "pages": n, "scrolls": n, "reason": …}``, or
         None when the script itself failed. ``reason`` is one of
         ``chunk-done`` (budget spent), ``cap`` (max_cards reached), ``end``
         (nothing left to load) or ``stalled`` (clicked, nothing loaded).
         """
         script = (
             _SCROLLER_JS +
-            "const [cardSel, listSel, btnSel, labels, maxClicks, maxCards,"
+            "const [cardSel, listSel, btnSel, labels, maxPages, maxCards,"
             "       pauseMs, growthTimeout, done] = arguments;"
             "const count = () => document.querySelectorAll(cardSel).length;"
             "const text = el => ((el.innerText || el.textContent || '') + ' ' +"
@@ -727,11 +744,11 @@ class LinkedInWithdrawBot(ClickMixin):
             "    || cands.find(b => labels.some(l => text(b).includes(l)))"
             "    || null;"
             "};"
-            "let clicks = 0, scrolls = 0, idle = 0;"
-            "const finish = (reason) => done({cards: count(), clicks, scrolls, reason});"
+            "let pages = 0, scrolls = 0, idle = 0;"
+            "const finish = (reason) => done({cards: count(), pages, scrolls, reason});"
             "const step = () => {"
             "  if (maxCards && count() >= maxCards) return finish('cap');"
-            "  if (clicks >= maxClicks) return finish('chunk-done');"
+            "  if (pages >= maxPages) return finish('chunk-done');"
             "  const before = count();"
             "  scrollBottom(listSel, cardSel);"
             "  scrolls++;"
@@ -740,11 +757,14 @@ class LinkedInWithdrawBot(ClickMixin):
             "    idle = 0;"
             "    btn.scrollIntoView({block: 'end'});"
             "    btn.click();"
-            "    clicks++;"
             "  }"
             "  const deadline = Date.now() + (btn ? growthTimeout : 2500);"
             "  const waitGrow = () => {"
-            "    if (count() > before) { idle = 0; return setTimeout(step, pauseMs); }"
+            # A page is a page: however it arrived, it costs one budget.
+            "    if (count() > before) {"
+            "      idle = 0; pages++;"
+            "      return setTimeout(step, pauseMs);"
+            "    }"
             "    if (Date.now() > deadline) {"
             "      if (btn) return finish('stalled');"
             "      idle++;"
@@ -757,33 +777,35 @@ class LinkedInWithdrawBot(ClickMixin):
             "};"
             "step();"
         )
-        budget = max_clicks * (growth_timeout_ms + pause_ms) / 1000 + 30
+        budget = max_pages * (growth_timeout_ms + pause_ms) / 1000 + 30
         try:
             self.driver.set_script_timeout(budget)
             return self.driver.execute_async_script(
                 script, self._resolve_card_selector(), _LIST_CONTAINER,
-                _CLICKABLE, list(_LOAD_MORE_LABELS), max_clicks,
+                _CLICKABLE, list(_LOAD_MORE_LABELS), max_pages,
                 max_cards or 0, pause_ms, growth_timeout_ms)
         except Exception as e:
             logger.warning(f"In-page expansion failed ({type(e).__name__}: {e}); "
                            f"falling back to trusted clicks.")
             return None
 
-    def scroll_to_end(self, max_clicks=None, max_cards=None, stop_when=None,
+    def scroll_to_end(self, max_pages=None, max_cards=None, stop_when=None,
                       use_js=True):
         """Load invitation pages until the oldest one is in the DOM.
 
         Clicks "Load more" repeatedly, scrolling it into view each time, and
         stops at the first of: the button disappearing (true end of the
-        list), the list refusing to grow, ``max_clicks`` or ``max_cards``
+        list), the list refusing to grow, ``max_pages`` or ``max_cards``
         reached, or ``stop_when`` returning True.
 
         Args:
-            max_clicks: Cap on "Load more" clicks. ``None`` = unlimited.
-                        With ~1000 invitations the fully expanded DOM gets
-                        heavy, so cap it when only recent pages are needed.
+            max_pages: Cap on pages loaded. ``None`` = unlimited. With ~1000
+                       invitations the fully expanded DOM gets heavy, so cap
+                       it when only recent pages are needed. A page counts
+                       however it arrived: some builds have no "Load more"
+                       button at all and page on scroll instead.
             max_cards: Cap on loaded invitation cards — the same bound as
-                       max_clicks, expressed in the unit the caller actually
+                       max_pages, expressed in the unit the caller actually
                        cares about. ``None`` = unlimited.
             stop_when: Callable taking the list of raw "Sent …" labels (list
                        order, newest first) and returning True to stop early
@@ -811,7 +833,7 @@ class LinkedInWithdrawBot(ClickMixin):
             return 0
 
         logger.info(f"{count} invitation(s) loaded; expanding the list …")
-        clicks = 0
+        pages = 0
 
         while True:
             if max_cards is not None and count >= max_cards:
@@ -827,9 +849,9 @@ class LinkedInWithdrawBot(ClickMixin):
                     f"(oldest: {self.oldest_label() or 'unknown'}).")
                 return count
 
-            if max_clicks is not None and clicks >= max_clicks:
+            if max_pages is not None and pages >= max_pages:
                 logger.info(
-                    f"Reached the {max_clicks}-click limit with {count} "
+                    f"Reached the {max_pages}-page limit with {count} "
                     f"invitation(s) loaded.")
                 return count
 
@@ -840,21 +862,21 @@ class LinkedInWithdrawBot(ClickMixin):
                 # up to ten page loads — on a slow list that reads as "it
                 # never stops". Shrink the chunk whenever something is
                 # waiting to stop it.
-                budget = JS_STOP_CHECK_CLICKS if stop_when else JS_CHUNK_CLICKS
-                if max_clicks is not None:
-                    budget = min(budget, max_clicks - clicks)
-                result = self.expand_in_page(max_clicks=budget,
+                budget = JS_STOP_CHECK_PAGES if stop_when else JS_CHUNK_PAGES
+                if max_pages is not None:
+                    budget = min(budget, max_pages - pages)
+                result = self.expand_in_page(max_pages=budget,
                                              max_cards=max_cards)
                 if result is None:
                     use_js = False
                     continue
 
-                clicks += result.get("clicks", 0)
+                pages += result.get("pages", 0)
                 grown = result.get("cards", count)
                 if grown > count:
                     count = grown
                     logger.info(
-                        f"{count} invitation(s) loaded — {clicks} page(s), "
+                        f"{count} invitation(s) loaded — {pages} page(s), "
                         f"{result.get('scrolls', 0)} scroll(s) this chunk "
                         f"(oldest: {self.oldest_label() or 'unknown'}).")
 
@@ -891,10 +913,15 @@ class LinkedInWithdrawBot(ClickMixin):
                 self._scroll_list_bottom()
                 grown = self._wait_for_growth(count, timeout=4)
                 if grown > count:
-                    logger.info(
-                        f"{grown} invitation(s) loaded by scrolling "
-                        f"(oldest: {self.oldest_label() or 'unknown'}).")
+                    # No button was pressed, but a page arrived all the same;
+                    # not counting it here is what let a bounded run walk the
+                    # whole list.
+                    pages += 1
                     count = grown
+                    logger.info(
+                        f"{count} invitation(s) loaded by scrolling — "
+                        f"{pages} page(s) "
+                        f"(oldest: {self.oldest_label() or 'unknown'}).")
                     continue
                 button = self._find_load_more()
             if button is None:
@@ -917,7 +944,7 @@ class LinkedInWithdrawBot(ClickMixin):
                 self.list_exhausted = True
                 return count
 
-            clicks += 1
+            pages += 1
             grown = self._wait_for_growth(count)
             if grown <= count:
                 logger.warning(
@@ -927,7 +954,7 @@ class LinkedInWithdrawBot(ClickMixin):
                 return count
 
             logger.info(
-                f"Page {clicks}: {grown} invitation(s) loaded "
+                f"Page {pages}: {grown} invitation(s) loaded "
                 f"(oldest: {self.oldest_label() or 'unknown'}).")
             count = grown
             self._page_pause()
@@ -1126,7 +1153,7 @@ class LinkedInWithdrawBot(ClickMixin):
         if self.rolling:
             return self._run_rolling()
 
-        loaded = self.scroll_to_end(max_clicks=self.max_clicks,
+        loaded = self.scroll_to_end(max_pages=self.max_pages,
                                     max_cards=self.max_cards,
                                     stop_when=self._load_stop_condition(),
                                     use_js=self.use_js)
@@ -1217,7 +1244,7 @@ class LinkedInWithdrawBot(ClickMixin):
     def _top_up(self):
         """Load another couple of pages; return how many cards are loaded now.
 
-        The batch is ``ROLLING_CHUNK_CLICKS`` pages, or ``--max-clicks``
+        The batch is ``ROLLING_CHUNK_PAGES`` pages, or ``--max-pages``
         when given: in a rolling run that flag reads as pages per top-up,
         since there is no single expansion for it to cap.
 
@@ -1234,13 +1261,13 @@ class LinkedInWithdrawBot(ClickMixin):
             self._page_pause()
             before = self.card_count()
         cap = self.max_cards
-        clicks = self.max_clicks or ROLLING_CHUNK_CLICKS
+        pages = self.max_pages or ROLLING_CHUNK_PAGES
         if cap is not None and before >= cap:
             logger.debug(
                 f"{before} card(s) loaded, already at the --max {cap} "
                 f"ceiling; loading one page anyway to keep moving down.")
-            cap, clicks = None, 1
-        return self.scroll_to_end(max_clicks=clicks, max_cards=cap,
+            cap, pages = None, 1
+        return self.scroll_to_end(max_pages=pages, max_cards=cap,
                                   use_js=self.use_js)
 
     def _run_rolling(self):
@@ -1346,8 +1373,9 @@ if __name__ == "__main__":
         "-y", "--yes", action="store_true",
         help="Skip the confirmation prompt")
     parser.add_argument(
-        "--max-clicks", type=int, default=None,
-        help="Cap the 'Load more' clicks, with or without --until "
+        "--max-pages", "--max-clicks", dest="max_pages", type=int,
+        default=None,
+        help="Cap the pages loaded, with or without --until "
              "(default: unlimited). With --rolling: pages per top-up")
     parser.add_argument(
         "--no-js", action="store_true",
@@ -1379,13 +1407,13 @@ if __name__ == "__main__":
             auto_continue=args.yes,
             use_js=not args.no_js,
             stop_early=args.stop_early,
-            max_clicks=args.max_clicks,
+            max_pages=args.max_pages,
             rolling=args.rolling,
         )
         if args.probe:
             bot.probe()
         elif cutoff is None:
-            total = bot.scroll_to_end(max_clicks=args.max_clicks,
+            total = bot.scroll_to_end(max_pages=args.max_pages,
                                       max_cards=args.max_cards,
                                       use_js=not args.no_js)
             print(f"\n{total} invitation(s) loaded. "
