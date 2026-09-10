@@ -157,6 +157,21 @@ the weekly log filenames.
 These details matter if you need to adapt the bot to LinkedIn UI changes — the
 selectors live in [`connect/bot.py`](bot.py).
 
+- **Scanning a page of results.** The results are a virtualized `LazyColumn`
+  inside the app shell's own scroll container — the document itself does not
+  scroll, so `window.scrollTo` moves nothing (see
+  [`common/scrolling.py`](../common/scrolling.py)). The scan drives that inner
+  container from top to bottom, re-scanning as rows mount, and only calls a
+  page finished once the list stops growing. A page whose cards all offer
+  Follow or Message is reported with its breakdown
+  (`10 result(s), 0 connectable (7 follow-only, 3 message-only)`) so a page
+  with nobody to invite is never confused with a page the bot failed to read.
+- **Pages that come back empty.** After a burst of invitations LinkedIn starts
+  serving result pages where no card offers Connect at all. Before accepting
+  that verdict the bot reloads the page once — `page=N` in the search URL
+  means the reload lands back where it was — and rescans. A page that renders
+  no cards at all is also reloaded, and if it stays empty the run stops rather
+  than paging past people it never saw.
 - **Shadow DOM modal.** LinkedIn renders the invite modal inside an open Shadow
   DOM host (`#interop-outlet`). Selenium's XPath can't reach into shadow roots,
   so every modal interaction (Add a note, the textarea, Send) goes through

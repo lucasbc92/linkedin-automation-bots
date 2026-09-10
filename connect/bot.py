@@ -15,6 +15,7 @@ from common.clicking import ClickMixin
 from common.logging_setup import current_week_start
 from common.messages import MessageTemplates
 from common.names import display_first_name
+from common.scrolling import list_state, scroll_list_step, scroll_list_to_top
 from common.sleep import allow_sleep, prevent_sleep
 from connect.history import count_invites_for_week, record_invite
 from connect.tech_recruiter import DEFAULT_MIN_SCORE, score_title
@@ -33,6 +34,23 @@ INVITE_ENDPOINT_FRAGMENTS = (
 # gap is still needed for LinkedIn's UI to settle between actions.
 FAST_PAUSE_FACTOR = 0.1
 MIN_FAST_PAUSE = 0.5
+
+# The results are a virtualized LazyColumn: a page holds ten people but only
+# the rows near the scroll position exist in the DOM, and they mount as the
+# app shell's inner container scrolls (see common/scrolling.py). Scanning
+# whatever is mounted and stopping there reads a page of Follow-only cards as
+# an empty page, so the scan scrolls the list to its end before giving up.
+RESULT_LIST = "[data-testid='lazy-column'], [data-component-type='LazyColumn']"
+RESULT_CARD = "div[role='listitem']"
+CONNECT_XPATH = ("//a[starts-with(@aria-label, 'Invite ') and "
+                 "contains(@aria-label, 'to connect')]")
+# Ten results per page need three or four steps; the cap only exists so a
+# list that somehow keeps growing cannot hold a run forever.
+MOUNT_STEP_LIMIT = 30
+# How long newly scrolled-to rows get to mount before they are counted.
+MOUNT_SETTLE_SECONDS = 0.6
+# How long a freshly navigated page gets to render its first card.
+RESULTS_TIMEOUT_SECONDS = 20
 
 
 class LinkedInConnectBot(ClickMixin):
@@ -61,6 +79,9 @@ class LinkedInConnectBot(ClickMixin):
         self.connections_failed = 0
         self.connections_skipped = 0
         self.non_tech_skipped = 0
+        # Not shrunk by --fast: this is how long the page needs to render,
+        # not a pause added to look human.
+        self.mount_settle = MOUNT_SETTLE_SECONDS
 
     def _pause_seconds(self, low, high):
         """How long the next humanizing pause should last, in seconds."""
@@ -588,48 +609,214 @@ class LinkedInConnectBot(ClickMixin):
             logger.debug(f"Error extracting name from modal: {e}")
             return None
 
+    def results_state(self):
+        """Card count and scroll position of the results list."""
+        return list_state(self.driver, RESULT_LIST, RESULT_CARD)
+
+    def wait_for_results(self, timeout=RESULTS_TIMEOUT_SECONDS):
+        """Park the results list at the top and wait for its first card.
+
+        Returns the number of cards mounted, or 0 if the page never rendered
+        any — which is a page worth retrying, not a page worth skipping.
+        """
+        end = time.time() + timeout
+        while True:
+            state = scroll_list_to_top(self.driver, RESULT_LIST, RESULT_CARD)
+            if state.get("cards"):
+                return state["cards"]
+            if time.time() >= end:
+                return 0
+            time.sleep(0.5)
+
+    def mount_more_results(self):
+        """Scroll one step further down the list so more rows mount.
+
+        Returns True while there is more of the page left to scan: either new
+        rows appeared, or the scroller had not yet reached the bottom.
+        """
+        before = self.results_state()
+        after = scroll_list_step(self.driver, RESULT_LIST, RESULT_CARD)
+        if self.mount_settle:
+            time.sleep(self.mount_settle)
+            after = self.results_state()
+
+        if after.get("cards", 0) > before.get("cards", 0):
+            logger.debug(
+                f"Mounted {after['cards'] - before['cards']} more result(s) "
+                f"({after['cards']} on the page)")
+            return True
+
+        # The scroller moved, so rows that were out of view are now in it.
+        if after.get("top") != before.get("top"):
+            return True
+
+        # Bottom reached with nothing new: give a slow render one last chance
+        # before calling the page finished. Reading the count a beat too
+        # early is exactly how rows used to go unseen.
+        if self.mount_settle:
+            time.sleep(self.mount_settle)
+            if self.results_state().get("cards", 0) > after.get("cards", 0):
+                return True
+
+        return not after.get("atBottom", True)
+
+    def next_connect_target(self, processed_labels):
+        """Return the next (control, aria-label) this page has not yet handled.
+
+        Scrolling is part of the search: LinkedIn mounts result rows lazily,
+        so a scan that finds nothing among the mounted ones has to pull the
+        rest of the list into the DOM before it can conclude the page is
+        done. Returns (None, None) once the whole list has been walked.
+        """
+        for _ in range(MOUNT_STEP_LIMIT):
+            for link in self.driver.find_elements(By.XPATH, CONNECT_XPATH):
+                try:
+                    label = link.get_attribute("aria-label")
+                except Exception:
+                    continue
+                if label and label not in processed_labels:
+                    return link, label
+
+            if not self.mount_more_results():
+                return None, None
+
+        logger.warning(
+            f"Gave up mounting this page after {MOUNT_STEP_LIMIT} scroll steps")
+        return None, None
+
+    def page_action_tally(self):
+        """How this page's cards break down by the action they offer.
+
+        A page with ten cards and no Connect control is a normal LinkedIn
+        result — Follow-only and Message-only profiles cannot be invited from
+        search — but it used to be indistinguishable from a page the bot had
+        simply failed to read. Logging the split tells the two apart.
+        """
+        js = (
+            "/*linkedin-connect:tally*/"
+            "const cards = [...document.querySelectorAll(arguments[0])];"
+            "let connect = 0, follow = 0, message = 0, other = 0;"
+            "for (const c of cards) {"
+            "  if (c.querySelector(\"a[aria-label^='Invite ']\")) connect++;"
+            "  else if (c.querySelector(\"button[aria-label^='Follow'], "
+            "                           a[aria-label^='Follow']\")) follow++;"
+            "  else if (c.querySelector(\"a[aria-label^='Send a message'], "
+            "                           a[href*='messaging/compose']\")) message++;"
+            "  else other++;"
+            "}"
+            "return {cards: cards.length, connect, follow, message, other};")
+        try:
+            tally = self.driver.execute_script(js, RESULT_CARD)
+        except Exception as e:
+            logger.debug(f"Could not tally page actions: {type(e).__name__}: {e}")
+            return None
+        return tally if isinstance(tally, dict) else None
+
+    def log_page_scanned(self, handled, tally=None):
+        """Report what the finished page actually held."""
+        if tally is None:
+            tally = self.page_action_tally()
+        if not tally:
+            logger.info(f"Page scanned — {handled} Connect control(s) handled")
+            return
+
+        breakdown = ", ".join(
+            f"{tally[key]} {key}-only" for key in ("follow", "message")
+            if tally.get(key))
+        detail = f" ({breakdown})" if breakdown else ""
+        logger.info(
+            f"Page scanned — {tally['cards']} result(s), "
+            f"{tally['connect']} connectable{detail}; "
+            f"{handled} Connect control(s) handled")
+
+    def reload_results(self):
+        """Reload this results page in place, keeping our spot in the pagination.
+
+        LinkedIn's search URL carries ``page=N``, so a reload lands back on
+        the same page — except on page 1, where the parameter is absent and a
+        reload lands there anyway. Anywhere else without it, reloading would
+        silently restart the run from the top, so it is refused instead.
+        """
+        before = self.current_page_number()
+        try:
+            url = self.driver.current_url or ""
+        except Exception:
+            url = ""
+
+        if "page=" not in url and before not in (None, 1):
+            logger.debug(
+                f"Not reloading page {before}: this URL does not carry the "
+                f"page number, so a reload would restart from page 1")
+            return False
+
+        try:
+            self.driver.refresh()
+        except Exception as e:
+            logger.warning(f"Could not reload the page: {e}")
+            return False
+
+        if not self.wait_for_results():
+            return False
+
+        after = self.current_page_number()
+        if before is not None and after is not None and after != before:
+            logger.warning(f"Reloading moved from page {before} to page {after}")
+        return True
+
+    def await_results(self):
+        """Make sure this page actually rendered its results before scanning.
+
+        A page that renders nothing is a page the bot cannot read, and paging
+        past it loses those people silently — the failure this whole scan
+        path exists to stop. So an empty page is reloaded once, and if it is
+        still empty the run stops loudly instead of walking on.
+        """
+        if self.wait_for_results():
+            return True
+
+        logger.warning("No results rendered on this page — reloading it once")
+        if self.reload_results():
+            logger.info("Results rendered after the reload")
+            return True
+
+        logger.error(
+            "This page still shows no results after a reload. Stopping here "
+            "rather than paging past people the bot never saw.")
+        return False
+
     def process_page(self):
         """Process all Connect controls on the current page. Returns False to stop."""
-        try:
-            self.wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//section[@aria-label='Primary content'] | //div[@role='listitem']")))
-        except Exception:
-            logger.warning("Could not find search results, trying to continue anyway")
+        if not self.await_results():
+            return False
 
-        try:
-            for _ in range(3):
-                self.driver.execute_script("window.scrollBy(0, document.body.scrollHeight/3);")
-                time.sleep(0.5)
-            self.driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(0.5)
-        except Exception:
-            pass
-
-        connect_xpath = ("//a[starts-with(@aria-label, 'Invite ') and "
-                         "contains(@aria-label, 'to connect')]")
         processed_labels = set()
+        reloaded = False
 
         while True:
             if not self.check_invitation_limit_warning():
                 logger.info("Stopping due to invitation limit.")
                 return False
 
-            connect_links = self.driver.find_elements(By.XPATH, connect_xpath)
-
-            target = None
-            target_label = None
-            for link in connect_links:
-                try:
-                    label = link.get_attribute("aria-label")
-                except Exception:
-                    continue
-                if label and label not in processed_labels:
-                    target = link
-                    target_label = label
-                    break
+            target, target_label = self.next_connect_target(processed_labels)
 
             if target is None:
-                logger.info("No more Connect controls on this page")
+                tally = self.page_action_tally()
+                # A full page of results where not one card offers Connect is
+                # what LinkedIn starts serving after a burst of invitations:
+                # the run's last two sessions each went dead this way, nine
+                # pages in a row, and came back the moment the page was
+                # loaded afresh. So the verdict is only accepted once it
+                # survives a reload.
+                if (not processed_labels and not reloaded and tally
+                        and tally.get("cards") and not tally.get("connect")):
+                    logger.info(
+                        f"{tally['cards']} result(s) but none connectable — "
+                        f"reloading the page before accepting that")
+                    reloaded = True
+                    if self.reload_results():
+                        continue
+
+                self.log_page_scanned(len(processed_labels), tally)
                 break
 
             processed_labels.add(target_label)
@@ -844,6 +1031,15 @@ class LinkedInConnectBot(ClickMixin):
             self.driver.switch_to.window(handles[0])
         return False
 
+    def current_page_number(self):
+        """The results page LinkedIn is showing, or None while it is swapping."""
+        try:
+            current = self.driver.find_element(
+                By.XPATH, "//button[@aria-current='true']")
+            return int(current.text.strip())
+        except Exception:
+            return None
+
     def go_to_next_page(self):
         """Navigate to the next or previous results page. Returns False when none available."""
         try:
@@ -882,39 +1078,37 @@ class LinkedInConnectBot(ClickMixin):
                 logger.info(f"No more pages ({'previous' if self.reverse else 'next'} button disabled)")
                 return False
 
-            if self.reverse:
-                try:
-                    current = self.driver.find_element(By.XPATH, "//button[@aria-current='true']")
-                    if current.text.strip() == "1":
-                        logger.info("Reached first page")
-                        return False
-                except Exception:
-                    pass
-            else:
-                try:
-                    current = self.driver.find_element(By.XPATH, "//button[@aria-current='true']")
-                    if current.text.strip() == "100":
-                        logger.info("Reached LinkedIn's page limit (100)")
-                        return False
-                except Exception:
-                    pass
+            current = self.current_page_number()
+            if self.reverse and current == 1:
+                logger.info("Reached first page")
+                return False
+            if not self.reverse and current == 100:
+                logger.info("Reached LinkedIn's page limit (100)")
+                return False
 
             self.driver.execute_script("arguments[0].scrollIntoView(true);", nav_button)
             time.sleep(1)
             current_url = self.driver.current_url
+            before = self.current_page_number()
             self._robust_click(nav_button)
-            time.sleep(5)
 
-            if self.driver.current_url != current_url:
-                return True
+            # Wait for the swap rather than guessing at it: LinkedIn empties
+            # the list for a moment and then remounts it, so a fixed sleep
+            # either wastes time or scans the outgoing page.
+            end = time.time() + 15
+            while time.time() < end:
+                time.sleep(0.5)
+                if self.driver.current_url != current_url:
+                    return True
+                now = self.current_page_number()
+                if now is not None and now != before:
+                    return True
 
-            try:
-                loading = self.driver.find_element(By.XPATH, "//div[contains(@class, 'loading')]")
-                self.wait.until(EC.staleness_of(loading))
-            except Exception:
-                pass
-
-            return True
+            logger.warning(
+                f"The {'previous' if self.reverse else 'next'} page button did "
+                f"not move off page {before}. Stopping rather than rescanning "
+                f"the same page.")
+            return False
 
         except (TimeoutException, NoSuchElementException):
             logger.warning(f"No {'previous' if self.reverse else 'next'} page button or it's disabled")
