@@ -6,7 +6,9 @@ import time
 
 from selenium.common.exceptions import (ElementClickInterceptedException,
                                         NoSuchElementException, TimeoutException)
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -44,6 +46,36 @@ RESULT_LIST = "[data-testid='lazy-column'], [data-component-type='LazyColumn']"
 RESULT_CARD = "div[role='listitem']"
 CONNECT_XPATH = ("//a[starts-with(@aria-label, 'Invite ') and "
                  "contains(@aria-label, 'to connect')]")
+
+# Cards that offer only Follow. LinkedIn puts no Connect control on these in
+# the results list, but the action still exists one level down, on the
+# person's own profile, behind the three-dots More menu. Deliberately not
+# scoped to the card markup — that changes shape between LinkedIn releases,
+# while the label does not; the card is found by climbing afterwards.
+FOLLOW_XPATH = ("//button[starts-with(@aria-label, 'Follow ')] | "
+                "//a[starts-with(@aria-label, 'Follow ')]")
+# Both kinds of person, as one list. An XPath union returns its matches in
+# document order, so a single walk hands back the page's people in the order
+# it shows them, each to be invited whichever way their own card allows.
+TARGET_XPATH = CONNECT_XPATH + " | " + FOLLOW_XPATH
+# The Connect control a card would have to carry for its Follow button to be
+# the cheap way in; a card holding one is left to the normal route.
+CARD_INVITE_XPATH = (".//a[starts-with(@aria-label, 'Invite ')] | "
+                     ".//button[starts-with(@aria-label, 'Invite ')]")
+# The Connect control as it appears on a profile page: in the top card, in the
+# "Connect if you know each other" prompt, or inside the More menu once it is
+# open. Shadow roots only take CSS, so this is CSS.
+PROFILE_CONNECT_CSS = ("a[aria-label^='Invite '][aria-label*='to connect'], "
+                       "button[aria-label^='Invite '][aria-label*='to connect']")
+# The three-dots button in a profile's top card. The sticky header renders a
+# second one, so the search takes whichever is on screen and tries the next if
+# the menu it opens has no Connect in it.
+MORE_BUTTON_XPATH = ("//button[@aria-label='More' or "
+                     "starts-with(@aria-label, 'More actions')]")
+MORE_BUTTON_ATTEMPTS = 3
+# How long a profile page gets to render, and its More menu to open.
+PROFILE_TIMEOUT_SECONDS = 20
+MENU_TIMEOUT_SECONDS = 5
 # Ten results per page need three or four steps; the cap only exists so a
 # list that somehow keeps growing cannot hold a run forever.
 MOUNT_STEP_LIMIT = 30
@@ -79,9 +111,13 @@ class LinkedInConnectBot(ClickMixin):
         self.connections_failed = 0
         self.connections_skipped = 0
         self.non_tech_skipped = 0
-        # Not shrunk by --fast: this is how long the page needs to render,
-        # not a pause added to look human.
+        # Of the invitations sent, how many took the profile detour.
+        self.profile_invites_sent = 0
+        # Not shrunk by --fast: these are how long the page needs to render,
+        # not pauses added to look human.
         self.mount_settle = MOUNT_SETTLE_SECONDS
+        self.page_timeout = PROFILE_TIMEOUT_SECONDS
+        self.menu_timeout = MENU_TIMEOUT_SECONDS
 
     def _pause_seconds(self, low, high):
         """How long the next humanizing pause should last, in seconds."""
@@ -381,16 +417,26 @@ class LinkedInConnectBot(ClickMixin):
         parts = value.split('"')
         return "concat(" + ", '\"', ".join(f'"{p}"' for p in parts) + ")"
 
-    def extract_name_from_aria_label(self, aria_label):
-        """Extract the display name from 'Invite <Full Name> to connect'."""
+    @staticmethod
+    def full_name_from_label(aria_label):
+        """The person's full name out of a card's action label.
+
+        Both shapes a card can offer name the person: 'Invite <Full Name> to
+        connect' and 'Follow <Full Name>'.
+        """
         if not aria_label:
             return None
         match = re.match(r"Invite\s+(.+?)\s+to connect", aria_label, re.IGNORECASE)
-        if match:
-            full_name = match.group(1).strip()
-            if full_name:
-                return display_first_name(full_name)
-        return None
+        if match is None:
+            match = re.match(r"Follow\s+(.+)", aria_label, re.IGNORECASE)
+        if match is None:
+            return None
+        return match.group(1).strip() or None
+
+    def extract_name_from_aria_label(self, aria_label):
+        """Extract the display first name from a card's Connect or Follow label."""
+        full_name = self.full_name_from_label(aria_label)
+        return display_first_name(full_name) if full_name else None
 
     def extract_name_from_profile(self, connect_button):
         """Climb the DOM from the Connect button to find the person's name span."""
@@ -660,29 +706,54 @@ class LinkedInConnectBot(ClickMixin):
 
         return not after.get("atBottom", True)
 
-    def next_connect_target(self, processed_labels):
-        """Return the next (control, aria-label) this page has not yet handled.
+    def needs_profile_detour(self, control):
+        """Whether this Follow button is the only way in to its card's person.
+
+        A Follow button outside a result card has no profile behind it to
+        open, and a card that carries a Connect control as well is reachable
+        without leaving the page at all.
+        """
+        card = self.find_result_card(control)
+        if card is None:
+            return False
+        try:
+            return not card.find_elements(By.XPATH, CARD_INVITE_XPATH)
+        except Exception:
+            return False
+
+    def next_target(self, processed_labels, include_follow=True):
+        """Return the next (control, aria-label, kind) this page has not handled.
+
+        One walk covers the whole page, in the order it shows people: each is
+        handed back with the route their own card allows — "connect" for the
+        Invite control on the card, "follow" for someone who has to be invited
+        from their profile instead.
 
         Scrolling is part of the search: LinkedIn mounts result rows lazily,
         so a scan that finds nothing among the mounted ones has to pull the
         rest of the list into the DOM before it can conclude the page is
-        done. Returns (None, None) once the whole list has been walked.
+        done. Returns (None, None, None) once the whole list has been walked.
         """
+        xpath = TARGET_XPATH if include_follow else CONNECT_XPATH
         for _ in range(MOUNT_STEP_LIMIT):
-            for link in self.driver.find_elements(By.XPATH, CONNECT_XPATH):
+            for control in self.driver.find_elements(By.XPATH, xpath):
                 try:
-                    label = link.get_attribute("aria-label")
+                    label = control.get_attribute("aria-label")
                 except Exception:
                     continue
-                if label and label not in processed_labels:
-                    return link, label
+                if not label or label in processed_labels:
+                    continue
+                if label.startswith("Invite "):
+                    return control, label, "connect"
+                if self.needs_profile_detour(control):
+                    return control, label, "follow"
 
             if not self.mount_more_results():
-                return None, None
+                return None, None, None
 
         logger.warning(
             f"Gave up mounting this page after {MOUNT_STEP_LIMIT} scroll steps")
-        return None, None
+        return None, None, None
 
     def page_action_tally(self):
         """How this page's cards break down by the action they offer.
@@ -690,7 +761,8 @@ class LinkedInConnectBot(ClickMixin):
         A page with ten cards and no Connect control is a normal LinkedIn
         result — Follow-only and Message-only profiles cannot be invited from
         search — but it used to be indistinguishable from a page the bot had
-        simply failed to read. Logging the split tells the two apart.
+        simply failed to read. Logging the split tells the two apart, and
+        says how much of the page had to go the long way round.
         """
         js = (
             "/*linkedin-connect:tally*/"
@@ -717,7 +789,7 @@ class LinkedInConnectBot(ClickMixin):
         if tally is None:
             tally = self.page_action_tally()
         if not tally:
-            logger.info(f"Page scanned — {handled} Connect control(s) handled")
+            logger.info(f"Page scanned — {handled} person(s) handled")
             return
 
         breakdown = ", ".join(
@@ -727,23 +799,27 @@ class LinkedInConnectBot(ClickMixin):
         logger.info(
             f"Page scanned — {tally['cards']} result(s), "
             f"{tally['connect']} connectable{detail}; "
-            f"{handled} Connect control(s) handled")
+            f"{handled} person(s) handled")
 
-    def reload_results(self):
-        """Reload this results page in place, keeping our spot in the pagination.
+    def results_page_is_restorable(self):
+        """True when this results page can be left and then come back to.
 
-        LinkedIn's search URL carries ``page=N``, so a reload lands back on
-        the same page — except on page 1, where the parameter is absent and a
-        reload lands there anyway. Anywhere else without it, reloading would
-        silently restart the run from the top, so it is refused instead.
+        LinkedIn's search URL carries ``page=N``, so reloading it — or
+        navigating away and stepping back — lands on the same page. On page 1
+        the parameter is absent and a reload lands there anyway. Anywhere
+        else without it, leaving would silently restart the run from the top.
         """
-        before = self.current_page_number()
+        page = self.current_page_number()
         try:
             url = self.driver.current_url or ""
         except Exception:
             url = ""
+        return "page=" in url or page in (None, 1)
 
-        if "page=" not in url and before not in (None, 1):
+    def reload_results(self):
+        """Reload this results page in place, keeping our spot in the pagination."""
+        before = self.current_page_number()
+        if not self.results_page_is_restorable():
             logger.debug(
                 f"Not reloading page {before}: this URL does not carry the "
                 f"page number, so a reload would restart from page 1")
@@ -784,20 +860,443 @@ class LinkedInConnectBot(ClickMixin):
             "rather than paging past people the bot never saw.")
         return False
 
+    def profile_url_for(self, control):
+        """The profile URL of the person whose result card holds this control."""
+        card = self.find_result_card(control)
+        links = []
+        if card is not None:
+            try:
+                links = card.find_elements(By.XPATH, ".//a[contains(@href, '/in/')]")
+            except Exception:
+                links = []
+        if not links:
+            # Some card layouts wrap the whole row in the profile link itself,
+            # so there is no descendant anchor to find — only an ancestor one.
+            try:
+                links = [control.find_element(
+                    By.XPATH, "ancestor::a[contains(@href, '/in/')][1]")]
+            except Exception:
+                links = []
+
+        for link in links:
+            try:
+                href = link.get_attribute("href") or ""
+            except Exception:
+                continue
+            if "/in/" in href:
+                # The person's own link always comes first in their card; the
+                # ones after it belong to shared connections.
+                return href.split("?")[0]
+        return None
+
+    @staticmethod
+    def _same_person(one, other):
+        """Compare two names ignoring case and runs of whitespace."""
+        return (" ".join((one or "").split()).casefold()
+                == " ".join((other or "").split()).casefold())
+
+    def profile_connect_controls(self):
+        """Every Connect control on the current profile page, shadow DOM included."""
+        found = []
+        try:
+            found.extend(self.driver.find_elements(
+                By.CSS_SELECTOR, PROFILE_CONNECT_CSS))
+        except Exception:
+            pass
+        for host_sel in ("#interop-outlet", "[data-testid='interop-shadowdom']"):
+            try:
+                hosts = self.driver.find_elements(By.CSS_SELECTOR, host_sel)
+            except Exception:
+                continue
+            for host in hosts:
+                try:
+                    found.extend(host.shadow_root.find_elements(
+                        By.CSS_SELECTOR, PROFILE_CONNECT_CSS))
+                except Exception:
+                    continue
+        return found
+
+    def find_profile_connect(self, full_name, timeout=None):
+        """The 'Invite <full_name> to connect' control on the open profile.
+
+        Matched by name on purpose: a profile page carries Connect buttons for
+        *other* people too — the "More profiles for you" rail — and clicking
+        one of those would send the invitation to the wrong person.
+        """
+        end = time.time() + (self.menu_timeout if timeout is None else timeout)
+        while True:
+            for control in self.profile_connect_controls():
+                try:
+                    if not control.is_displayed():
+                        continue
+                    label = control.get_attribute("aria-label") or ""
+                except Exception:
+                    continue
+                if full_name and not self._same_person(
+                        self.full_name_from_label(label), full_name):
+                    continue
+                return control
+            if time.time() >= end:
+                return None
+            time.sleep(0.3)
+
+    def close_open_menu(self):
+        """Press Escape to close whatever dropdown is open."""
+        try:
+            ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+        except Exception as e:
+            logger.debug(f"Could not close the open menu: {type(e).__name__}: {e}")
+
+    def connect_from_more_menu(self, full_name):
+        """Open the profile's three-dots menu and return the Connect item in it.
+
+        For someone you can only Follow, Connect is not in the top card at
+        all — it lives one level down, behind More. The sticky header renders
+        a second More button, so each one is tried in turn until a menu with
+        Connect in it opens.
+        """
+        try:
+            buttons = self.driver.find_elements(By.XPATH, MORE_BUTTON_XPATH)
+        except Exception as e:
+            logger.debug(f"Could not look for a More button: {type(e).__name__}: {e}")
+            return None
+
+        tried = 0
+        for button in buttons:
+            if tried >= MORE_BUTTON_ATTEMPTS:
+                break
+            try:
+                if not button.is_displayed():
+                    continue
+            except Exception:
+                continue
+            tried += 1
+            try:
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({block: 'center'});", button)
+            except Exception:
+                pass
+            self._human_pause(2, 5)
+            self._robust_click(button, f"More button on {full_name}'s profile")
+            control = self.find_profile_connect(full_name)
+            if control is not None:
+                return control
+            logger.debug("That More menu holds no Connect; closing it")
+            self.close_open_menu()
+
+        return None
+
+    def wait_for_profile(self, full_name, timeout=None):
+        """Wait until the profile page has rendered its action buttons."""
+        timeout = self.page_timeout if timeout is None else timeout
+        end = time.time() + timeout
+        while True:
+            try:
+                if (self.driver.find_elements(By.XPATH, MORE_BUTTON_XPATH)
+                        or self.driver.find_elements(
+                            By.CSS_SELECTOR, PROFILE_CONNECT_CSS)):
+                    return True
+            except Exception:
+                pass
+            if time.time() >= end:
+                logger.warning(
+                    f"{full_name}'s profile did not render its actions "
+                    f"within {timeout}s")
+                return False
+            time.sleep(0.5)
+
+    def connect_on_profile(self, full_name, name):
+        """Send the invitation from the person's own profile page.
+
+        Returns the same verdicts as ``complete_invite_modal``.
+        """
+        if not self.wait_for_profile(full_name):
+            self.connections_skipped += 1
+            return "skipped"
+
+        # The actions have rendered by now, so a Connect in the top card is
+        # already there to be found; anything else is behind the menu.
+        control = self.find_profile_connect(full_name, timeout=0)
+        if control is None:
+            control = self.connect_from_more_menu(full_name)
+        if control is None:
+            logger.warning(
+                f"No Connect action on {full_name}'s profile — not even "
+                f"behind More. Skipping.")
+            self.connections_skipped += 1
+            return "skipped"
+
+        try:
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'});", control)
+        except Exception:
+            pass
+        self._human_pause(2, 4)
+        self._robust_click(control, f"Connect control on {full_name}'s profile")
+        time.sleep(3)
+
+        status = self.complete_invite_modal(f"Invite {full_name} to connect", name)
+        if status == "sent":
+            self.profile_invites_sent += 1
+        return status
+
+    def on_results_page(self):
+        """Whether the browser is showing a search-results page right now."""
+        try:
+            return "/search/results" in (self.driver.current_url or "")
+        except Exception:
+            return False
+
+    def return_to_results(self, results_url):
+        """Step back from a profile onto the results page the detour left.
+
+        Returns False when the results could not be restored, which ends the
+        run — paging on from a page the bot cannot see loses everyone on it.
+        """
+        if self.on_results_page():
+            # The detour never left: a profile that failed to open leaves the
+            # results on screen, and stepping back from *there* would land on
+            # the previous page of results and rescan the wrong people.
+            return bool(self.await_results())
+
+        try:
+            self.driver.back()
+        except Exception as e:
+            logger.warning(f"Could not go back to the results: {e}")
+
+        end = time.time() + self.page_timeout
+        while True:
+            if self.on_results_page():
+                break
+            if time.time() >= end:
+                logger.warning(
+                    "Going back did not land on the search results; opening "
+                    "them again directly")
+                try:
+                    self.driver.get(results_url)
+                except Exception as e:
+                    logger.error(f"Could not reopen the results page: {e}")
+                    return False
+                break
+            time.sleep(0.5)
+
+        return bool(self.await_results())
+
+    def invite_via_profile(self, control, label, name):
+        """Invite someone whose result card offers nothing but Follow.
+
+        The detour: open their profile, take Connect out of the More menu,
+        run the usual note-and-Send ritual there, then step back into the
+        results, where the scan resumes from the person just handled.
+        """
+        full_name = self.full_name_from_label(label) or label
+        profile_url = self.profile_url_for(control)
+        if not profile_url:
+            logger.warning(f"No profile link on the card for {label}. Skipping.")
+            self.connections_skipped += 1
+            return "skipped"
+
+        try:
+            results_url = self.driver.current_url
+        except Exception:
+            results_url = None
+
+        logger.info(
+            f"{full_name} can only be followed from the results — opening "
+            f"{profile_url} to connect there instead")
+
+        try:
+            self.driver.get(profile_url)
+        except Exception as e:
+            logger.error(f"Could not open {profile_url}: {e}")
+            self.connections_skipped += 1
+            status = "skipped"
+        else:
+            try:
+                status = self.connect_on_profile(full_name, name)
+            except Exception as e:
+                logger.error(f"Error connecting from {profile_url}: {e}")
+                try:
+                    self.dismiss_open_modal()
+                except Exception:
+                    pass
+                self.connections_skipped += 1
+                status = "skipped"
+
+        if not self.return_to_results(results_url):
+            logger.error(
+                "Lost the results page after the profile detour. Stopping "
+                "rather than paging on from somewhere else.")
+            return "stop"
+        return status
+
+    def complete_invite_modal(self, target_label, name):
+        """Drive the open invite modal through to a confirmed invitation.
+
+        Shared by both routes into it — the Connect control on a search card
+        and the one behind a profile's More menu — because the ritual (note,
+        Send, confirmation, ledger) is the same either way.
+
+        Returns "sent", "failed", "skipped", or "stop" when the run must end.
+        """
+        shadow = self.get_modal_shadow_root(timeout=10)
+        if shadow is None:
+            if not self.check_invitation_limit_warning():
+                return "stop"
+            logger.warning(f"No modal appeared for {target_label}. Skipping.")
+            self.connections_skipped += 1
+            return "skipped"
+
+        if not self.check_invitation_limit_warning():
+            return "stop"
+
+        if self.modal_requires_email(shadow):
+            logger.warning(f"{target_label} requires email to connect. Skipping.")
+            self.dismiss_open_modal()
+            self.wait_modal_closed(shadow, timeout=3)
+            self.connections_skipped += 1
+            self._human_pause(2, 4)
+            return "skipped"
+
+        if not name:
+            name = self.extract_name_from_modal(shadow)
+
+        if self.no_message:
+            send_btn = self.find_in_shadow(
+                shadow, "button[aria-label='Send without a note']", require_enabled=True)
+            if send_btn is None:
+                if not self.check_invitation_limit_warning():
+                    return "stop"
+                logger.warning(f"No 'Send without a note' button for {target_label}. Skipping.")
+                self.connections_skipped += 1
+                return "skipped"
+            self._robust_click(send_btn, "Send without a note button")
+            logger.info(f"Sending without note to {name or target_label}")
+        else:
+            add_note_btn = self.find_in_shadow(
+                shadow, "button[aria-label='Add a note']", require_enabled=True)
+            if add_note_btn is None:
+                if not self.check_invitation_limit_warning():
+                    return "stop"
+                logger.warning(f"No 'Add a note' button for {target_label}. Skipping.")
+                self.connections_skipped += 1
+                return "skipped"
+            self._robust_click(add_note_btn, "Add a note button")
+
+            message_box = self.find_in_shadow(shadow, "#custom-message")
+            if message_box is None:
+                if not self.check_invitation_limit_warning():
+                    return "stop"
+                logger.warning(f"No message box appeared for {target_label}. Skipping.")
+                self.connections_skipped += 1
+                return "skipped"
+
+            personalized_message = self._msg.personalize(name)
+            logger.info(
+                f"Sending to {name or target_label}: "
+                f"{personalized_message.splitlines()[0] if personalized_message else ''}")
+
+            self.fill_message_box(message_box, personalized_message)
+            time.sleep(1)
+
+            try:
+                textarea_len = self.driver.execute_script(
+                    "return (arguments[0].value || '').length;", message_box)
+                logger.debug(
+                    f"Textarea length as seen by LinkedIn: {textarea_len} "
+                    f"(expected {len(personalized_message.encode('utf-16-le')) // 2})")
+            except Exception:
+                pass
+
+            send_btn = self.find_in_shadow(
+                shadow, "button[aria-label='Send invitation']", require_enabled=True)
+            if send_btn is None:
+                if not self.check_invitation_limit_warning():
+                    return "stop"
+                logger.warning(
+                    f"Send button never became clickable for {target_label}. Skipping.")
+                self.connections_skipped += 1
+                return "skipped"
+
+            try:
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({block: 'center'});", send_btn)
+            except Exception:
+                pass
+            logger.debug(f"Clicking Send (enabled={send_btn.is_enabled()}) for {target_label}")
+            self._robust_click(send_btn, "Send invitation button")
+
+        if not self.wait_modal_closed(shadow, timeout=5):
+            if not self.check_invitation_limit_warning():
+                return "stop"
+            logger.warning(f"Modal never closed for {target_label}. Skipping.")
+            return "skipped"
+
+        if self.detect_rate_limit_429():
+            return "stop"
+
+        full_name = self.full_name_from_label(target_label)
+        if self.verify_successful_invitation_sent(target_label, full_name):
+            self.connections_sent += 1
+            # Recorded before anything else can fail, so an invite is never
+            # counted in the log but missing from the ledger.
+            record_invite(full_name or name or target_label)
+            logger.info(
+                f"Invitation sent to {name or target_label} "
+                f"[sent={self.connections_sent}, "
+                f"failed={self.connections_failed}, "
+                f"skipped={self.connections_skipped}]")
+
+            if self.max_invites and self.connections_sent >= self.max_invites:
+                logger.info(f"Reached --max {self.max_invites}. Stopping.")
+                return "stop"
+            return "sent"
+
+        if not self.check_invitation_limit_warning():
+            return "stop"
+        self.connections_failed += 1
+        logger.warning(
+            f"Invite to {target_label} did not register "
+            f"[sent={self.connections_sent}, "
+            f"failed={self.connections_failed}, "
+            f"skipped={self.connections_skipped}]")
+        return "failed"
+
+    def detours_allowed(self):
+        """Whether Follow-only people on this page may be invited via profile.
+
+        The detour leaves the results page, so it is only on the table when
+        coming back lands on the same page of results.
+        """
+        if self.results_page_is_restorable():
+            return True
+        logger.warning(
+            "This results URL does not carry its page number, so leaving it "
+            "for a profile would restart the run from page 1 — the "
+            "Follow-only people on this page are left alone.")
+        return False
+
     def process_page(self):
-        """Process all Connect controls on the current page. Returns False to stop."""
+        """Process every reachable person on the current page. Returns False to stop."""
         if not self.await_results():
             return False
 
+        include_follow = self.detours_allowed()
+        try:
+            results_url = self.driver.current_url
+        except Exception:
+            results_url = None
         processed_labels = set()
         reloaded = False
+        probed = False
 
         while True:
             if not self.check_invitation_limit_warning():
                 logger.info("Stopping due to invitation limit.")
                 return False
 
-            target, target_label = self.next_connect_target(processed_labels)
+            target, target_label, kind = self.next_target(
+                processed_labels, include_follow=include_follow)
 
             if target is None:
                 tally = self.page_action_tally()
@@ -819,6 +1318,30 @@ class LinkedInConnectBot(ClickMixin):
                 self.log_page_scanned(len(processed_labels), tally)
                 break
 
+            # The first person on this page can only be reached through
+            # their profile. Before paying for that — and for the nine behind
+            # them — find out whether the page is one LinkedIn has stripped
+            # of its Connect controls, which is what it starts serving after
+            # a burst of invitations, and which a reload usually undoes. The
+            # connect-only scan walks the whole list, so the answer is about
+            # the page rather than about the handful of rows mounted so far.
+            if kind == "follow" and not processed_labels and not probed:
+                probed = True
+                connectable, _, _ = self.next_target(set(), include_follow=False)
+                if connectable is None and not reloaded:
+                    tally = self.page_action_tally()
+                    if tally and tally.get("cards"):
+                        logger.info(
+                            f"{tally['cards']} result(s) and not one Connect "
+                            f"control — reloading before spending a profile "
+                            f"detour on each of them")
+                        reloaded = True
+                        if self.reload_results():
+                            continue
+                # The scan above moved the list, so the walk starts over to
+                # pick the same person up by a handle that is still attached.
+                continue
+
             processed_labels.add(target_label)
 
             name = self.extract_name_from_aria_label(target_label)
@@ -826,7 +1349,8 @@ class LinkedInConnectBot(ClickMixin):
                 logger.info(f"Processing {target_label} → first name: {name}")
 
             # Judge the headline before clicking: a skipped card must cost
-            # nothing against the weekly invitation quota.
+            # nothing against the weekly invitation quota — and, for a
+            # Follow-only card, nothing in page loads either.
             if self.tech_only:
                 verdict = self.evaluate_title(target, target_label)
                 if verdict is None:
@@ -849,6 +1373,23 @@ class LinkedInConnectBot(ClickMixin):
                     f"Tech recruiter confirmed for {name or target_label}: "
                     f"{verdict.title!r} (score {verdict.score:.2f}; {verdict.reason})")
 
+            if kind == "follow":
+                # The page is about to be left and restored, so every element
+                # found on it goes stale; the scan picks up from the labels
+                # already processed. Errors are caught here rather than in the
+                # handler below, which assumes the results are still on screen.
+                try:
+                    status = self.invite_via_profile(target, target_label, name)
+                except Exception as e:
+                    logger.error(f"Error on the profile detour for {target_label}: {e}")
+                    self.connections_skipped += 1
+                    status = ("skipped" if self.return_to_results(results_url)
+                              else "stop")
+                if status == "stop":
+                    return False
+                self._human_pause(8, 18)
+                continue
+
             try:
                 self.driver.execute_script(
                     "arguments[0].scrollIntoView({block: 'center'});", target)
@@ -857,127 +1398,8 @@ class LinkedInConnectBot(ClickMixin):
                 self._robust_click(target, f"Connect control ({target_label})")
                 time.sleep(3)
 
-                shadow = self.get_modal_shadow_root(timeout=10)
-                if shadow is None:
-                    if not self.check_invitation_limit_warning():
-                        return False
-                    logger.warning(f"No modal appeared for {target_label}. Skipping.")
-                    self.connections_skipped += 1
-                    continue
-
-                if not self.check_invitation_limit_warning():
+                if self.complete_invite_modal(target_label, name) == "stop":
                     return False
-
-                if self.modal_requires_email(shadow):
-                    logger.warning(f"{target_label} requires email to connect. Skipping.")
-                    self.dismiss_open_modal()
-                    self.wait_modal_closed(shadow, timeout=3)
-                    self.connections_skipped += 1
-                    self._human_pause(2, 4)
-                    continue
-
-                if not name:
-                    name = self.extract_name_from_modal(shadow)
-
-                if self.no_message:
-                    send_btn = self.find_in_shadow(
-                        shadow, "button[aria-label='Send without a note']", require_enabled=True)
-                    if send_btn is None:
-                        if not self.check_invitation_limit_warning():
-                            return False
-                        logger.warning(f"No 'Send without a note' button for {target_label}. Skipping.")
-                        self.connections_skipped += 1
-                        continue
-                    self._robust_click(send_btn, "Send without a note button")
-                    logger.info(f"Sending without note to {name or target_label}")
-                else:
-                    add_note_btn = self.find_in_shadow(
-                        shadow, "button[aria-label='Add a note']", require_enabled=True)
-                    if add_note_btn is None:
-                        if not self.check_invitation_limit_warning():
-                            return False
-                        logger.warning(f"No 'Add a note' button for {target_label}. Skipping.")
-                        self.connections_skipped += 1
-                        continue
-                    self._robust_click(add_note_btn, "Add a note button")
-
-                    message_box = self.find_in_shadow(shadow, "#custom-message")
-                    if message_box is None:
-                        if not self.check_invitation_limit_warning():
-                            return False
-                        logger.warning(f"No message box appeared for {target_label}. Skipping.")
-                        self.connections_skipped += 1
-                        continue
-
-                    personalized_message = self._msg.personalize(name)
-                    logger.info(
-                        f"Sending to {name or target_label}: "
-                        f"{personalized_message.splitlines()[0] if personalized_message else ''}")
-
-                    self.fill_message_box(message_box, personalized_message)
-                    time.sleep(1)
-
-                    try:
-                        textarea_len = self.driver.execute_script(
-                            "return (arguments[0].value || '').length;", message_box)
-                        logger.debug(
-                            f"Textarea length as seen by LinkedIn: {textarea_len} "
-                            f"(expected {len(personalized_message.encode('utf-16-le')) // 2})")
-                    except Exception:
-                        pass
-
-                    send_btn = self.find_in_shadow(
-                        shadow, "button[aria-label='Send invitation']", require_enabled=True)
-                    if send_btn is None:
-                        if not self.check_invitation_limit_warning():
-                            return False
-                        logger.warning(
-                            f"Send button never became clickable for {target_label}. Skipping.")
-                        self.connections_skipped += 1
-                        continue
-
-                    try:
-                        self.driver.execute_script(
-                            "arguments[0].scrollIntoView({block: 'center'});", send_btn)
-                    except Exception:
-                        pass
-                    logger.debug(f"Clicking Send (enabled={send_btn.is_enabled()}) for {target_label}")
-                    self._robust_click(send_btn, "Send invitation button")
-
-                if not self.wait_modal_closed(shadow, timeout=5):
-                    if not self.check_invitation_limit_warning():
-                        return False
-                    logger.warning(f"Modal never closed for {target_label}. Skipping.")
-                    continue
-
-                if self.detect_rate_limit_429():
-                    return False
-
-                m = re.match(r"Invite\s+(.+?)\s+to connect", target_label)
-                full_name = m.group(1) if m else None
-                if self.verify_successful_invitation_sent(target_label, full_name):
-                    self.connections_sent += 1
-                    # Recorded before anything else can fail, so an invite is
-                    # never counted in the log but missing from the ledger.
-                    record_invite(full_name or name or target_label)
-                    logger.info(
-                        f"Invitation sent to {name or target_label} "
-                        f"[sent={self.connections_sent}, "
-                        f"failed={self.connections_failed}, "
-                        f"skipped={self.connections_skipped}]")
-
-                    if self.max_invites and self.connections_sent >= self.max_invites:
-                        logger.info(f"Reached --max {self.max_invites}. Stopping.")
-                        return False
-                else:
-                    if not self.check_invitation_limit_warning():
-                        return False
-                    self.connections_failed += 1
-                    logger.warning(
-                        f"Invite to {target_label} did not register "
-                        f"[sent={self.connections_sent}, "
-                        f"failed={self.connections_failed}, "
-                        f"skipped={self.connections_skipped}]")
 
                 self._human_pause(8, 18)
 
@@ -1122,9 +1544,11 @@ class LinkedInConnectBot(ClickMixin):
         direction = "reverse" if self.reverse else "forward"
         logger.info(f"Completed ({direction}) — {pages_processed} page(s) processed.")
         logger.info(
-            f"Session summary — sent: {self.connections_sent} | "
-            f"failed: {self.connections_failed} | "
-            f"skipped: {self.connections_skipped}"
+            f"Session summary — sent: {self.connections_sent}"
+            + (f" (of which {self.profile_invites_sent} via the profile detour)"
+               if self.profile_invites_sent else "")
+            + f" | failed: {self.connections_failed}"
+            + f" | skipped: {self.connections_skipped}"
             + (f" (of which {self.non_tech_skipped} not tech recruiters)"
                if self.non_tech_skipped else ""))
 

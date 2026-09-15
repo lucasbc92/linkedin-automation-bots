@@ -49,6 +49,7 @@ def _make_bot(**overrides):
     bot.connections_failed = 0
     bot.connections_skipped = 0
     bot.non_tech_skipped = 0
+    bot.profile_invites_sent = 0
     bot.select_search_tab = lambda: True
     bot.check_invitation_limit_warning = lambda: True
     bot.go_to_next_page = lambda: False

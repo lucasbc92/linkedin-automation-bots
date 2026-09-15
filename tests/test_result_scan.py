@@ -151,11 +151,16 @@ def make_bot(page, **driver_kwargs):
 
 
 def drain(bot):
-    """Every label the scan yields for a page, in order."""
+    """Every Connect label the scan yields for a page, in order.
+
+    include_follow=False is the shape the scan takes on a results page
+    that must not be left — see tests/test_profile_connect.py for the walk
+    that also picks up the people who can only be invited from their profile.
+    """
     processed = set()
     labels = []
     while True:
-        target, label = bot.next_connect_target(processed)
+        target, label, _kind = bot.next_target(processed, include_follow=False)
         if target is None:
             return labels
         processed.add(label)
@@ -206,7 +211,7 @@ class PageScanTests(unittest.TestCase):
     def test_stops_after_the_step_limit_on_a_list_that_never_ends(self):
         page = VirtualizedResults(["follow"] * 5000, mounted=4)
         bot = make_bot(page)
-        target, label = bot.next_connect_target(set())
+        target, label, _kind = bot.next_target(set(), include_follow=False)
         self.assertIsNone(target)
         self.assertLess(page.mounted, 5000)
 

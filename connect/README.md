@@ -14,13 +14,17 @@ Starting from an open **people-search results** tab
 
 1. Finds the people-search tab among your open Chrome tabs (falling back to any
    search-results tab, then the current tab).
-2. On each results page, scrolls to lazy-load every card, then walks every
-   **"Invite … to connect"** control top-to-bottom.
+2. On each results page, scrolls to lazy-load every card, then walks the
+   people on it top-to-bottom.
 3. Reads each person's headline off their card and skips anyone who is not a
    **tech** recruiter — see [Tech-recruiter filter](#tech-recruiter-filter).
    Skipped cards are never clicked, so they cost nothing against your weekly
    invitation quota.
-4. For each remaining person, opens the invite modal and either:
+4. Opens the invite modal for each remaining person — from the **"Invite … to
+   connect"** control on their card, or, when their card offers only
+   **Follow**, from their profile page instead (see
+   [Reaching people who only offer Follow](#reaching-people-who-only-offer-follow))
+   — and either:
    - clicks **Add a note**, types a personalized message, and clicks
      **Send invitation**; or
    - clicks **Send without a note** (when run with `-n`).
@@ -74,6 +78,57 @@ Fixed waits that exist to let the page render (the modal opening, a page
 loading) are unaffected — `--fast` only touches the humanizing pauses. Use it
 for short or test runs; a full run at this pace is a much more obviously
 automated pattern, and LinkedIn's weekly invitation cap applies either way.
+
+## Reaching people who only offer Follow
+
+LinkedIn keeps shrinking how many search results offer **Connect**. A card that
+offers only **Follow** cannot be invited from the results list at all — but the
+person behind it can still be invited from their own profile, where Connect
+sits behind the three-dots **More** menu.
+
+That is not a separate mode: it is one walk down the page, and each person is
+invited whichever way their own card allows. Where the card has a Connect
+control, it is clicked in place. Where it has only Follow, the bot:
+
+1. Scores the headline first, exactly as usual. Someone who fails the
+   [tech-recruiter filter](#tech-recruiter-filter) never costs a page load.
+2. Opens their profile (`linkedin.com/in/…`, read off the person's own link in
+   their card — not off a shared connection's).
+3. Uses the profile's Connect control if it shows one, otherwise opens the
+   **More** menu and takes Connect from there.
+4. Runs the same modal ritual: **Add a note**, the personalized message,
+   **Send invitation**, then the confirmation check and the ledger entry.
+5. Steps **back** into the results, which resume from the person just handled.
+   Everyone already processed on that page is remembered by their card's
+   label, so nobody is invited twice.
+
+The session summary reports how many invitations took the long way round:
+
+```
+Session summary — sent: 34 (of which 9 via the profile detour) | failed: 0 | skipped: 12
+```
+
+**What it costs.** Two page loads per Follow-only person, plus the usual 8–18 s
+pause, so a page thick with them takes minutes rather than seconds. It spends
+the same weekly invitation quota as any other invite — the detour reaches *more
+people*, not more invitations.
+
+**Three things it refuses to do:**
+
+- **Invite the wrong person.** A profile page also shows Connect buttons for
+  other people (the "More profiles for you" rail). The control that gets
+  clicked is matched against the name on the card the detour started from, so
+  a rail button is never the one clicked.
+- **Lose your place.** Leaving the results page is only safe when coming back
+  lands on the same page, which needs `page=N` in the search URL (page 1 works
+  without it). Where that is missing, the detour is skipped for that page, with
+  a warning, and its Follow-only people are left alone rather than risking a
+  restart from page 1. If the results cannot be restored after a detour, the
+  run stops instead of paging on from somewhere unknown.
+- **Pay for a page LinkedIn has merely stripped.** After a burst of invitations
+  LinkedIn starts serving pages where *no* card offers Connect. Before spending
+  a detour on each of ten people, such a page is reloaded once — the controls
+  usually come straight back.
 
 ## Tech-recruiter filter
 
@@ -190,9 +245,19 @@ selectors live in [`connect/bot.py`](bot.py).
   preserved (see [`common/names.py`](../common/names.py)).
 - **"Enter their email to connect" screen.** Some profiles require an email to
   invite; the bot detects this, cancels, and skips the person.
+- **The profile detour.** Follow-only people are reached through their profile
+  page (see [above](#reaching-people-who-only-offer-follow)). The Connect
+  control there is found by name — on the page or inside the **More** menu,
+  light DOM or shadow DOM — because the page also carries Connect buttons for
+  other people. Both routes into the invite modal share one implementation
+  (`complete_invite_modal()`), so the note, the Send, the confirmation and the
+  ledger behave identically whichever way the modal was opened.
 
 ### Reference HTML
 
 [`connect/examples/`](examples/) holds saved LinkedIn HTML snippets (the invite
-modal, note modal, email-input screen, follow-person card, old/new
-search-results containers) used as fixtures when updating selectors.
+modal, note modal, email-input screen, follow-person card, a full profile page,
+old/new search-results containers) used as fixtures when updating selectors.
+`tests/test_profile_connect.py` runs the Follow, More and Connect selectors
+against those files, so a LinkedIn markup change shows up as a failing test
+rather than as a silent run that invites nobody.
