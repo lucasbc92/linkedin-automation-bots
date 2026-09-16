@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import time
+import unicodedata
 
 from selenium.common.exceptions import (ElementClickInterceptedException,
                                         NoSuchElementException, TimeoutException)
@@ -59,14 +60,24 @@ FOLLOW_XPATH = ("//button[starts-with(@aria-label, 'Follow ')] | "
 # it shows them, each to be invited whichever way their own card allows.
 TARGET_XPATH = CONNECT_XPATH + " | " + FOLLOW_XPATH
 # The Connect control a card would have to carry for its Follow button to be
-# the cheap way in; a card holding one is left to the normal route.
-CARD_INVITE_XPATH = (".//a[starts-with(@aria-label, 'Invite ')] | "
-                     ".//button[starts-with(@aria-label, 'Invite ')]")
+# the cheap way in; a card holding one is left to the normal route. Tag-free
+# on purpose: it only has to notice the control, never click it.
+CARD_INVITE_XPATH = ".//*[starts-with(@aria-label, 'Invite ')]"
 # The Connect control as it appears on a profile page: in the top card, in the
 # "Connect if you know each other" prompt, or inside the More menu once it is
 # open. Shadow roots only take CSS, so this is CSS.
-PROFILE_CONNECT_CSS = ("a[aria-label^='Invite '][aria-label*='to connect'], "
-                       "button[aria-label^='Invite '][aria-label*='to connect']")
+#
+# It matches any tag, because the three places do not agree on which one
+# carries the label. In the top card it is the <a> itself; in the More menu
+# the item is an <a href="/preload/custom-invite/…"> whose *inner div* holds
+# the label. Matching only a/button is why the menu route found nothing.
+PROFILE_CONNECT_CSS = "[aria-label^='Invite '][aria-label*='to connect']"
+# An open profile menu, and its items. Used to find Connect by where it is
+# when the name on it cannot be matched.
+MENU_CSS = "[role='menu']"
+MENU_ITEM_CSS = "[role='menuitem']"
+# From the labelled element to the thing that actually carries the action.
+CLICKABLE_XPATH = "ancestor-or-self::*[self::a or self::button][1]"
 # The three-dots button in a profile's top card. The sticky header renders a
 # second one, so the search takes whichever is on screen and tries the next if
 # the menu it opens has no Connect in it.
@@ -891,16 +902,26 @@ class LinkedInConnectBot(ClickMixin):
 
     @staticmethod
     def _same_person(one, other):
-        """Compare two names ignoring case and runs of whitespace."""
-        return (" ".join((one or "").split()).casefold()
-                == " ".join((other or "").split()).casefold())
+        """Compare two names ignoring case, whitespace and unicode form.
 
-    def profile_connect_controls(self):
-        """Every Connect control on the current profile page, shadow DOM included."""
+        "Nájera" can reach us composed from the card and decomposed from the
+        profile; the two spell the same name and must compare equal.
+        """
+        def key(name):
+            return unicodedata.normalize("NFC", " ".join((name or "").split())).casefold()
+
+        return key(one) == key(other)
+
+    def find_everywhere(self, css):
+        """Every element matching this CSS, document and shadow roots alike.
+
+        LinkedIn renders its overlays — the invite modal, and the popover the
+        More menu lives in — into an open Shadow DOM host, where a plain
+        document query cannot see them.
+        """
         found = []
         try:
-            found.extend(self.driver.find_elements(
-                By.CSS_SELECTOR, PROFILE_CONNECT_CSS))
+            found.extend(self.driver.find_elements(By.CSS_SELECTOR, css))
         except Exception:
             pass
         for host_sel in ("#interop-outlet", "[data-testid='interop-shadowdom']"):
@@ -910,11 +931,24 @@ class LinkedInConnectBot(ClickMixin):
                 continue
             for host in hosts:
                 try:
-                    found.extend(host.shadow_root.find_elements(
-                        By.CSS_SELECTOR, PROFILE_CONNECT_CSS))
+                    found.extend(host.shadow_root.find_elements(By.CSS_SELECTOR, css))
                 except Exception:
                     continue
         return found
+
+    def clickable_for(self, element):
+        """The anchor or button that actually carries this control's action.
+
+        A menu item labels its inner <div>, not the <a href="/preload/custom-
+        invite/…"> around it. A real click on the div bubbles up to the
+        anchor, but the JavaScript click at the bottom of the click ladder
+        would not follow the link, so the anchor is what gets handed back.
+        """
+        try:
+            found = element.find_elements(By.XPATH, CLICKABLE_XPATH)
+        except Exception:
+            return element
+        return found[0] if found else element
 
     def find_profile_connect(self, full_name, timeout=None):
         """The 'Invite <full_name> to connect' control on the open profile.
@@ -925,7 +959,7 @@ class LinkedInConnectBot(ClickMixin):
         """
         end = time.time() + (self.menu_timeout if timeout is None else timeout)
         while True:
-            for control in self.profile_connect_controls():
+            for control in self.find_everywhere(PROFILE_CONNECT_CSS):
                 try:
                     if not control.is_displayed():
                         continue
@@ -935,10 +969,50 @@ class LinkedInConnectBot(ClickMixin):
                 if full_name and not self._same_person(
                         self.full_name_from_label(label), full_name):
                     continue
-                return control
+                return self.clickable_for(control)
             if time.time() >= end:
                 return None
             time.sleep(0.3)
+
+    def connect_in_open_menu(self):
+        """The Connect item of whatever profile menu is open, found by place.
+
+        Matching on the name is the safe search, but it leans on the card and
+        the profile spelling that name the same way. Inside the person's own
+        More menu there is only one person Connect can mean, so a Connect item
+        there is taken even when the names did not line up — or when LinkedIn
+        labelled the item with nothing at all and only its text says what it
+        does.
+        """
+        for menu in self.find_everywhere(MENU_CSS):
+            try:
+                if not menu.is_displayed():
+                    continue
+            except Exception:
+                continue
+
+            try:
+                labelled = menu.find_elements(By.CSS_SELECTOR, PROFILE_CONNECT_CSS)
+            except Exception:
+                labelled = []
+            for control in labelled:
+                try:
+                    if control.is_displayed():
+                        return self.clickable_for(control)
+                except Exception:
+                    continue
+
+            try:
+                items = menu.find_elements(By.CSS_SELECTOR, MENU_ITEM_CSS)
+            except Exception:
+                items = []
+            for item in items:
+                try:
+                    if item.is_displayed() and (item.text or "").strip().casefold() == "connect":
+                        return self.clickable_for(item)
+                except Exception:
+                    continue
+        return None
 
     def close_open_menu(self):
         """Press Escape to close whatever dropdown is open."""
@@ -979,6 +1053,12 @@ class LinkedInConnectBot(ClickMixin):
             self._human_pause(2, 5)
             self._robust_click(button, f"More button on {full_name}'s profile")
             control = self.find_profile_connect(full_name)
+            if control is None:
+                control = self.connect_in_open_menu()
+                if control is not None:
+                    logger.info(
+                        f"Taking Connect from the open menu on {full_name}'s "
+                        f"profile — nothing on the page carries that name")
             if control is not None:
                 return control
             logger.debug("That More menu holds no Connect; closing it")

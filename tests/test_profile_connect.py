@@ -40,19 +40,21 @@ MOUNT_CHUNK = 3
 # A DOM small enough to read, real enough to climb
 # --------------------------------------------------------------------------
 
-_STEP = re.compile(r"^(?P<axis>\.//|//|ancestor::)?(?P<tag>[a-z*]+)(?P<preds>(\[[^]]*\])*)$")
+_STEP = re.compile(r"^(?P<axis>\.//|//|ancestor-or-self::|ancestor::)?"
+                   r"(?P<tag>[a-z*]+)(?P<preds>(\[[^]]*\])*)$")
 _PRED = re.compile(r"\[([^]]*)\]")
 _CALL = re.compile(r"(contains|starts-with)\(@([\w-]+), '([^']*)'\)")
+_SELF = re.compile(r"self::(\w+)")
 
 
 class Node:
-    """A DOM node that answers the handful of XPaths the bot actually uses."""
+    """A DOM node that answers the handful of queries the bot actually uses."""
 
     def __init__(self, tag, children=(), text="", **attrs):
         self.tag = tag
         self.attrs = {k.replace("_", "-"): v for k, v in attrs.items()}
         self.parent = None
-        self.text = text
+        self.own_text = text
         self.displayed = self.attrs.pop("displayed", True)
         self.children = []
         for child in children:
@@ -64,6 +66,12 @@ class Node:
         return self
 
     # -- what Selenium exposes -----------------------------------------
+    @property
+    def text(self):
+        """Selenium's .text is the whole subtree's rendered text."""
+        parts = [self.own_text] + [n.own_text for n in self._descendants()]
+        return " ".join(part for part in parts if part).strip()
+
     def get_attribute(self, name):
         return self.attrs.get(name)
 
@@ -73,14 +81,15 @@ class Node:
     def is_enabled(self):
         return True
 
-    def find_elements(self, by, xpath):
-        assert by == By.XPATH, xpath
-        return self._select(xpath)
+    def find_elements(self, by, selector):
+        if by == By.CSS_SELECTOR:
+            return [n for n in self._descendants() if css_matches(n, selector)]
+        return self._select(selector)
 
-    def find_element(self, by, xpath):
-        found = self.find_elements(by, xpath)
+    def find_element(self, by, selector):
+        found = self.find_elements(by, selector)
         if not found:
-            raise LookupError(xpath)
+            raise LookupError(selector)
         return found[0]
 
     # -- the mini XPath engine -----------------------------------------
@@ -95,6 +104,13 @@ class Node:
             yield node
             node = node.parent
 
+    def _pool(self, axis):
+        if axis == "ancestor::":
+            return list(self._ancestors())
+        if axis == "ancestor-or-self::":
+            return [self] + list(self._ancestors())
+        return list(self._descendants())
+
     def _select(self, xpath):
         found = []
         for step in xpath.split(" | "):
@@ -105,11 +121,9 @@ class Node:
                 continue
             match = _STEP.match(step)
             assert match, f"unsupported xpath: {step}"
-            axis, tag = match.group("axis"), match.group("tag")
+            tag = match.group("tag")
             preds = _PRED.findall(match.group("preds") or "")
-            pool = (self._ancestors() if axis == "ancestor::"
-                    else self._descendants())
-            hits = [n for n in pool
+            hits = [n for n in self._pool(match.group("axis"))
                     if (tag == "*" or n.tag == tag) and n._matches(preds)]
             found.extend(hits[:1] if any(p.isdigit() for p in preds) else hits)
         return found
@@ -117,6 +131,10 @@ class Node:
     def _matches(self, preds):
         for pred in preds:
             if pred.isdigit():
+                continue
+            if "self::" in pred:
+                if self.tag not in _SELF.findall(pred):
+                    return False
                 continue
             for term in pred.split(" and "):
                 call = _CALL.match(term.strip())
@@ -128,6 +146,75 @@ class Node:
                 if fn == "starts-with" and not actual.startswith(value):
                     return False
         return True
+
+
+_CSS_GROUP = re.compile(r"^(?P<tag>[a-z*]*)(?P<attrs>(\[[^]]*\])*)$")
+_CSS_ATTR = re.compile(r"^([\w-]+)(?:([~^*$]?=)'([^']*)')?$")
+
+
+def css_matches(node, selector):
+    """Does this node match the selector? Enough CSS for what the bot runs:
+    comma-separated groups of an optional tag name and attribute tests.
+
+    Parsed rather than looked up, so that changing a selector in the bot
+    changes what these tests see — a selector that stops matching LinkedIn's
+    markup has to fail a test, not quietly match nothing.
+    """
+    for group in selector.split(","):
+        match = _CSS_GROUP.match(group.strip())
+        assert match, f"unsupported css: {group}"
+        tag = match.group("tag")
+        if tag and tag != "*" and node.tag != tag:
+            continue
+        if all(_css_attr_matches(node, test)
+               for test in _PRED.findall(match.group("attrs") or "")):
+            return True
+    return False
+
+
+def _css_attr_matches(node, test):
+    match = _CSS_ATTR.match(test)
+    assert match, f"unsupported css attribute test: {test}"
+    name, operator, value = match.groups()
+    actual = node.attrs.get(name)
+    if actual is None:
+        return False
+    if operator is None:
+        return True
+    if operator == "=":
+        return actual == value
+    if operator == "^=":
+        return actual.startswith(value)
+    if operator == "*=":
+        return value in actual
+    raise AssertionError(f"unsupported css operator: {operator}")
+
+
+def menu_item(text, **attrs):
+    """A plain item of a profile's More menu."""
+    return Node("a", [Node("div", [Node("p", text=text)])],
+                role="menuitem", href="https://www.linkedin.com/in/someone/",
+                **attrs)
+
+
+def connect_menu_item(name):
+    """The Connect item as LinkedIn actually renders it.
+
+    The <a> carries the link and the menuitem role; the label naming the
+    person sits on a *div inside it*, which is why looking for an <a> or a
+    <button> with that label came up empty.
+    """
+    label = Node("div", [Node("div", [Node("p", text="Connect")])],
+                 **({"aria_label": f"Invite {name} to connect"} if name else {}))
+    return Node("a", [label], role="menuitem",
+                href="/preload/custom-invite/?vanityName=x")
+
+
+def top_card_connect(name):
+    """The Connect control in a profile's top card, which is labelled itself."""
+    return Node("a", [Node("span", text="Connect")],
+                aria_label=f"Invite {name} to connect",
+                href="/preload/custom-invite/?vanityName=x")
 
 
 def result_card(name, action, headline="Tech Recruiter", mutuals=()):
@@ -205,36 +292,51 @@ class FakeResults:
 
 
 class FakeProfile:
-    """A profile page. ``hidden_behind_more`` is the Connect that only exists
-    once the three-dots menu has been opened."""
+    """A profile page: its top card, its rail, and the menu More opens.
+
+    ``menu_connect`` says how the open menu offers Connect:
+      ``"labelled"``   — the item LinkedIn ships, whose inner div carries
+                         "Invite <name> to connect";
+      ``"unlabelled"`` — the same item with no aria-label anywhere, so only
+                         the word Connect in its text says what it does;
+      ``None``         — the menu has no Connect in it at all.
+    """
 
     def __init__(self, name, connect_in_top_card=False,
-                 hidden_behind_more=True, rail=("Someone Else",),
+                 menu_connect="labelled", rail=("Someone Else",),
                  more_buttons=2):
         self.name = name
-        self.hidden_behind_more = hidden_behind_more
-        self.menu_open = False
+        self.menu_connect = menu_connect
         self.more_clicks = 0
+        self.menu = None
         self.more_buttons = [Node("button", aria_label="More")
                              for _ in range(more_buttons)]
-        self.own_connect = (Node("a", aria_label=f"Invite {name} to connect")
-                            if connect_in_top_card else None)
+        self.own_connect = (top_card_connect(name) if connect_in_top_card
+                            else None)
         # Every profile page also carries Connect buttons for other people.
-        self.rail = [Node("a", aria_label=f"Invite {other} to connect")
-                     for other in rail]
-
-    def connect_controls(self):
-        controls = list(self.rail)
-        if self.own_connect is not None:
-            controls.insert(0, self.own_connect)
-        elif self.menu_open and self.hidden_behind_more:
-            controls.insert(0, Node("button",
-                                    aria_label=f"Invite {self.name} to connect"))
-        return controls
+        self.rail = [top_card_connect(other) for other in rail]
 
     def click_more(self):
         self.more_clicks += 1
-        self.menu_open = True
+        items = [menu_item("Send profile in a message"), menu_item("Save to PDF")]
+        if self.menu_connect:
+            items.append(connect_menu_item(
+                self.name if self.menu_connect == "labelled" else None))
+        items.append(menu_item(f"Report {self.name.split()[0]}"))
+        self.menu = Node("div", items, role="menu")
+
+    def menus(self):
+        return [self.menu] if self.menu is not None else []
+
+    def connect_controls(self):
+        """Everything on the page that PROFILE_CONNECT_CSS matches."""
+        found = list(self.rail)
+        if self.own_connect is not None:
+            found.insert(0, self.own_connect)
+        if self.menu is not None:
+            found.extend(self.menu.find_elements(
+                By.CSS_SELECTOR, connect_bot.PROFILE_CONNECT_CSS))
+        return found
 
 
 class FakeBrowser:
@@ -306,6 +408,8 @@ class FakeBrowser:
             return self.profile.more_buttons if self.profile else []
         if by == By.CSS_SELECTOR and selector == connect_bot.PROFILE_CONNECT_CSS:
             return self.profile.connect_controls() if self.profile else []
+        if by == By.CSS_SELECTOR and selector == connect_bot.MENU_CSS:
+            return self.profile.menus() if self.profile else []
         if by == By.CSS_SELECTOR and "interop" in selector:
             return []
         raise AssertionError(f"unexpected find_elements: {selector}")
@@ -503,25 +607,69 @@ class ProfileConnectTests(unittest.TestCase):
                          "Invite Renata Santos to connect")
 
     def test_a_page_with_only_other_peoples_connects_yields_nothing(self):
-        profile = FakeProfile("Renata Santos", connect_in_top_card=False,
-                              hidden_behind_more=False)
+        profile = FakeProfile("Renata Santos", menu_connect=None)
         bot = make_bot(self.browser_on(profile))
         self.assertIsNone(bot.find_profile_connect("Renata Santos", timeout=0))
 
-    def test_connect_is_taken_out_of_the_more_menu(self):
+    def test_the_menus_connect_is_labelled_on_a_div_inside_its_link(self):
+        """The regression this class exists for. LinkedIn does not put the
+        label on the menu item's <a> — it puts it on a div inside it, so a
+        search for a labelled <a> or <button> found nothing and every
+        Follow-only person was skipped."""
         profile = FakeProfile("Renata Santos")
         browser = self.browser_on(profile)
         bot = make_bot(browser)
+
         control = bot.connect_from_more_menu("Renata Santos")
+
         self.assertEqual(profile.more_clicks, 1)
-        self.assertEqual(control.get_attribute("aria-label"),
-                         "Invite Renata Santos to connect")
+        self.assertIsNotNone(control, "the Connect in the More menu was missed")
+        self.assertEqual(control.tag, "a", "the link is what carries the action")
+        self.assertIn("/preload/custom-invite/", control.get_attribute("href"))
+        self.assertIsNone(control.get_attribute("aria-label"),
+                          "the label is on the div inside it, not on the link")
+
+    def test_the_named_search_reaches_into_the_open_menu(self):
+        """The search that keeps the rail safe has to see the menu item too,
+        and the label it carries is on a div, not on the link."""
+        profile = FakeProfile("Renata Santos")
+        bot = make_bot(self.browser_on(profile))
+        profile.click_more()
+
+        control = bot.find_profile_connect("Renata Santos", timeout=0)
+
+        self.assertIsNotNone(
+            control, "the menu's Connect is labelled on an inner div")
+        self.assertIn("/preload/custom-invite/", control.get_attribute("href"))
+
+    def test_an_unlabelled_menu_item_is_found_by_what_it_reads(self):
+        """If LinkedIn drops the aria-label entirely, the item in the person's
+        own menu that reads Connect is still unambiguous."""
+        profile = FakeProfile("Renata Santos", menu_connect="unlabelled")
+        bot = make_bot(self.browser_on(profile))
+        control = bot.connect_from_more_menu("Renata Santos")
+        self.assertIsNotNone(control)
+        self.assertIn("/preload/custom-invite/", control.get_attribute("href"))
+
+    def test_a_menu_item_that_is_not_connect_is_never_taken(self):
+        profile = FakeProfile("Renata Santos", menu_connect=None)
+        bot = make_bot(self.browser_on(profile))
+        self.assertIsNone(bot.connect_in_open_menu() if profile.menu
+                          else bot.connect_from_more_menu("Renata Santos"))
+
+    def test_a_name_in_a_different_unicode_form_still_matches(self):
+        """'Nájera' can arrive composed from the card and decomposed from the
+        profile; they spell the same name."""
+        profile = FakeProfile("Alex Nájera Arcia", connect_in_top_card=True)
+        bot = make_bot(self.browser_on(profile))
+        decomposed = "Alex Nájera Arcia"
+        self.assertNotEqual(decomposed, "Alex Nájera Arcia")
+        self.assertIsNotNone(bot.find_profile_connect(decomposed, timeout=0))
 
     def test_gives_up_after_a_few_more_buttons(self):
         """The sticky header renders its own More button, and posts further
         down the page render others; only the first few are worth trying."""
-        profile = FakeProfile("Renata Santos", hidden_behind_more=False,
-                              more_buttons=9)
+        profile = FakeProfile("Renata Santos", menu_connect=None, more_buttons=9)
         bot = make_bot(self.browser_on(profile))
         self.assertIsNone(bot.connect_from_more_menu("Renata Santos"))
         self.assertEqual(profile.more_clicks, connect_bot.MORE_BUTTON_ATTEMPTS)
@@ -563,8 +711,7 @@ class DetourTests(unittest.TestCase):
 
     def test_a_profile_with_no_connect_anywhere_is_skipped(self):
         bot, browser, control, url, _profile = self.make()
-        browser.profiles[url] = FakeProfile("Renata Santos",
-                                            hidden_behind_more=False)
+        browser.profiles[url] = FakeProfile("Renata Santos", menu_connect=None)
         status = bot.invite_via_profile(control, "Follow Renata Santos", "Renata")
         self.assertEqual(status, "skipped")
         self.assertEqual(bot.connections_skipped, 1)
@@ -697,6 +844,35 @@ class SavedMarkupTests(unittest.TestCase):
         page = self.load("search-results-section-new.html")
         self.assertTrue(page.xpath(connect_bot.CONNECT_XPATH))
         self.assertEqual(page.xpath(connect_bot.FOLLOW_XPATH), [])
+
+    def test_the_more_menu_labels_its_connect_on_an_inner_div(self):
+        """Saved from a live Follow-only profile with the menu open. The
+        first cut of this feature looked for a labelled <a> or <button> and
+        found nothing here, so every one of those people was skipped."""
+        menu = self.load("profile-more-menu.html")
+
+        self.assertEqual(
+            menu.xpath("//a[starts-with(@aria-label, 'Invite ')] | "
+                       "//button[starts-with(@aria-label, 'Invite ')]"), [],
+            "the link does not carry the label")
+
+        labelled = menu.xpath("//*[starts-with(@aria-label, 'Invite ') and "
+                              "contains(@aria-label, 'to connect')]")
+        self.assertEqual([e.tag for e in labelled], ["div"])
+        self.assertEqual(labelled[0].get("aria-label"),
+                         "Invite Alex Nájera Arcia to connect")
+
+        clickable = labelled[0].xpath(connect_bot.CLICKABLE_XPATH)
+        self.assertEqual(clickable[0].tag, "a",
+                         "the <a> around it is what carries the action")
+        self.assertIn("/preload/custom-invite/", clickable[0].get("href"))
+
+    def test_the_more_menu_item_reads_connect(self):
+        """The last-resort match, for a menu that carries no label at all."""
+        menu = self.load("profile-more-menu.html")
+        items = menu.xpath("//*[@role='menu']//*[@role='menuitem']")
+        texts = [" ".join(item.text_content().split()) for item in items]
+        self.assertIn("Connect", texts)
 
     def test_the_profile_carries_a_more_button_and_a_named_connect(self):
         profile = self.load("profile.html")

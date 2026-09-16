@@ -95,7 +95,9 @@ control, it is clicked in place. Where it has only Follow, the bot:
 2. Opens their profile (`linkedin.com/in/…`, read off the person's own link in
    their card — not off a shared connection's).
 3. Uses the profile's Connect control if it shows one, otherwise opens the
-   **More** menu and takes Connect from there.
+   **More** menu and takes Connect from there. The menu item labels its
+   *inner div*, not the link around it, so the search matches any tag and
+   then clicks the enclosing `<a href="/preload/custom-invite/…">`.
 4. Runs the same modal ritual: **Add a note**, the personalized message,
    **Send invitation**, then the confirmation check and the ledger entry.
 5. Steps **back** into the results, which resume from the person just handled.
@@ -248,8 +250,11 @@ selectors live in [`connect/bot.py`](bot.py).
 - **The profile detour.** Follow-only people are reached through their profile
   page (see [above](#reaching-people-who-only-offer-follow)). The Connect
   control there is found by name — on the page or inside the **More** menu,
-  light DOM or shadow DOM — because the page also carries Connect buttons for
-  other people. Both routes into the invite modal share one implementation
+  light DOM or shadow DOM, on whatever tag carries the label — because the
+  page also carries Connect buttons for other people. Where nothing matches
+  the name, the Connect item of the open menu is taken instead (by its label,
+  or failing that by its text): inside that person's own menu there is only
+  one person it can mean. Both routes into the invite modal share one implementation
   (`complete_invite_modal()`), so the note, the Send, the confirmation and the
   ledger behave identically whichever way the modal was opened.
 
@@ -257,7 +262,8 @@ selectors live in [`connect/bot.py`](bot.py).
 
 [`connect/examples/`](examples/) holds saved LinkedIn HTML snippets (the invite
 modal, note modal, email-input screen, follow-person card, a full profile page,
-old/new search-results containers) used as fixtures when updating selectors.
+that profile's open **More** menu, old/new search-results containers) used as
+fixtures when updating selectors.
 `tests/test_profile_connect.py` runs the Follow, More and Connect selectors
 against those files, so a LinkedIn markup change shows up as a failing test
 rather than as a silent run that invites nobody.
