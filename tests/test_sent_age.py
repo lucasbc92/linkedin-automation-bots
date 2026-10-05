@@ -18,7 +18,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from withdraw.bot import (LinkedInWithdrawBot, parse_sent_age, parse_until,
-                          reached_cutoff, targets_older_than, targets_until)
+                          reached_cutoff, targets_older_than)
 
 TODAY = date(2026, 8, 20)
 
@@ -161,6 +161,40 @@ class TargetsOlderThanTest(unittest.TestCase):
         cards = [_card("Caroline", "Sent 2 months ago")]
         self.assertEqual(targets_older_than(cards, date(2026, 6, 1), TODAY), [])
 
+    def test_a_recent_card_at_the_bottom_does_not_hide_older_ones(self):
+        # LinkedIn doesn't always sort the list: here the last card is a week
+        # old while month-old ones sit above it. Walking up from the bottom
+        # stopped at that card and withdrew nothing.
+        cards = [
+            _card("Camilla", "Sent 1 hour ago"),
+            _card("Caroline", "Sent 2 months ago"),
+            _card("Anderson", "Sent 5 months ago"),
+            _card("Ana", "Sent 3 days ago"),
+            _card("Bruno", "Sent 1 week ago"),
+        ]
+        picked = targets_older_than(cards, date(2026, 7, 1), TODAY)
+        self.assertEqual([c["name"] for c in picked], ["Anderson", "Caroline"])
+
+    def test_out_of_order_cards_come_back_oldest_first(self):
+        cards = [
+            _card("Caroline", "Sent 2 months ago"),
+            _card("Camilla", "Sent 1 hour ago"),
+            _card("Anderson", "Sent 5 months ago"),
+            _card("Beatriz", "Sent 1 year ago"),
+        ]
+        picked = targets_older_than(cards, date(2026, 7, 1), TODAY)
+        self.assertEqual([c["name"] for c in picked],
+                         ["Beatriz", "Anderson", "Caroline"])
+
+    def test_same_age_cards_keep_bottom_up_order(self):
+        cards = [
+            _card("Caroline", "Sent 5 months ago"),
+            _card("Camilla", "Sent 1 hour ago"),
+            _card("Anderson", "Sent 5 months ago"),
+        ]
+        picked = targets_older_than(cards, date(2026, 7, 1), TODAY)
+        self.assertEqual([c["name"] for c in picked], ["Anderson", "Caroline"])
+
 
 class ParseUntilTest(unittest.TestCase):
     """--until accepts an absolute date or a relative age."""
@@ -193,7 +227,7 @@ class ParseUntilTest(unittest.TestCase):
             _card("boundary", "Sent 2 months ago"),
             _card("older", "Sent 5 months ago"),
         ]
-        self.assertEqual([c["name"] for c in targets_until(cards, cutoff, TODAY)],
+        self.assertEqual([c["name"] for c in targets_older_than(cards, cutoff, TODAY)],
                          ["older", "boundary"])
 
     def test_rejects_nonsense(self):
@@ -204,56 +238,6 @@ class ParseUntilTest(unittest.TestCase):
     def test_rejects_impossible_dates(self):
         with self.assertRaises(ValueError):
             parse_until("2026/02/31", TODAY)
-
-
-class TargetsUntilTest(unittest.TestCase):
-    """The upward walk: start at the oldest card, climb until the cutoff."""
-
-    def setUp(self):
-        # List order: newest first, the way LinkedIn renders it.
-        self.cards = [
-            _card("Camilla", "Sent 1 hour ago"),
-            _card("Ana", "Sent 3 days ago"),
-            _card("Caroline", "Sent 2 months ago"),
-            _card("Anderson", "Sent 5 months ago"),
-        ]
-
-    def test_walks_from_the_oldest_upward(self):
-        picked = targets_until(self.cards, date(2026, 7, 1), TODAY)
-        self.assertEqual([c["name"] for c in picked], ["Anderson", "Caroline"])
-
-    def test_stops_at_the_first_card_newer_than_the_cutoff(self):
-        picked = targets_until(self.cards, date(2026, 8, 1), TODAY)
-        self.assertEqual([c["name"] for c in picked],
-                         ["Anderson", "Caroline"])
-        self.assertNotIn("Ana", [c["name"] for c in picked])
-
-    def test_unreadable_age_is_stepped_over_not_treated_as_the_boundary(self):
-        cards = [
-            _card("Camilla", "Sent 1 hour ago"),
-            _card("Caroline", "Sent 2 months ago"),
-            _card("Mystery", "Pending"),
-            _card("Anderson", "Sent 5 months ago"),
-        ]
-        picked = targets_until(cards, date(2026, 7, 1), TODAY)
-        self.assertEqual([c["name"] for c in picked], ["Anderson", "Caroline"])
-
-    def test_empty_when_even_the_oldest_is_newer(self):
-        self.assertEqual(targets_until(self.cards, date(2020, 1, 1), TODAY), [])
-
-    def test_stopping_can_leave_older_cards_out_of_reach(self):
-        # A newer card sitting below an older one (LinkedIn occasionally
-        # reorders): the walk stops there, so the filter sees more than the
-        # walk collects — which is what run() warns about.
-        cards = [
-            _card("Caroline", "Sent 5 months ago"),
-            _card("Camilla", "Sent 1 hour ago"),
-            _card("Anderson", "Sent 5 months ago"),
-        ]
-        cutoff = date(2026, 7, 1)
-        self.assertEqual([c["name"] for c in targets_until(cards, cutoff, TODAY)],
-                         ["Anderson"])
-        self.assertEqual(len(targets_older_than(cards, cutoff, TODAY)), 2)
 
 
 class LoadStopConditionTest(unittest.TestCase):
@@ -499,6 +483,62 @@ class RollingRunTest(unittest.TestCase):
         # Nothing past the cutoff is loaded and the page will not grow, so the
         # run has to give up rather than page for the rest of the day.
         self.assertEqual(bot.withdrawn, 0)
+
+
+class DefaultRunTest(unittest.TestCase):
+    """The default run: expand the whole list, then withdraw what is old.
+
+    LinkedIn doesn't keep the list strictly newest-first — hours-old
+    invitations turn up below month-old ones. A run that walked up from the
+    bottom stopped at the first recent card and reported "Nothing to
+    withdraw" on a list full of old invitations.
+    """
+
+    OLD = "Sent 2 months ago"
+    RECENT = "Sent 1 week ago"
+
+    def _run(self, ages):
+        bot = object.__new__(LinkedInWithdrawBot)
+        bot.until = parse_until("1m")
+        bot.dry_run = False
+        bot.auto_continue = True
+        bot.rolling = False
+        bot.max_cards = None
+        bot.max_pages = None
+        bot.stop_early = False
+        bot.use_js = True
+        bot.withdrawn = bot.previewed = bot.failed = 0
+        bot._processed = set()
+
+        cards = [{"name": f"P{i}", "age": age, "key": f"k{i}"}
+                 for i, age in enumerate(ages)]
+        bot.withdrawn_keys = []
+        bot.scroll_to_end = lambda **kwargs: len(cards)
+        bot.oldest_label = lambda: None
+        bot._loaded_cards = lambda: cards
+
+        def withdraw_card(card):
+            bot.withdrawn_keys.append(card["key"])
+            return True
+
+        bot.withdraw_card = withdraw_card
+        with mock.patch("time.sleep"):
+            bot.run()
+        return bot
+
+    def test_a_recent_card_at_the_bottom_does_not_stop_the_run(self):
+        bot = self._run([self.RECENT, self.OLD, self.OLD, self.RECENT])
+        self.assertEqual(sorted(bot.withdrawn_keys), ["k1", "k2"])
+        self.assertEqual(bot.withdrawn, 2)
+
+    def test_old_cards_between_recent_ones_are_all_withdrawn(self):
+        bot = self._run([self.OLD, self.RECENT, "Sent 5 months ago",
+                         "Sent 3 hours ago", self.OLD, self.RECENT])
+        self.assertEqual(bot.withdrawn_keys, ["k2", "k4", "k0"])
+
+    def test_nothing_past_the_cutoff_withdraws_nothing(self):
+        bot = self._run([self.RECENT, "Sent 3 hours ago"])
+        self.assertEqual(bot.withdrawn_keys, [])
 
 
 if __name__ == "__main__":

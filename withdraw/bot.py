@@ -312,44 +312,23 @@ def reached_cutoff(labels, cutoff, today=None):
 
 
 def targets_older_than(cards, cutoff, today=None):
-    """The cards provably sent on or before ``cutoff``, oldest first.
+    """Every card provably sent on or before ``cutoff``, oldest first.
 
     ``cards`` are dicts as returned by ``LinkedInWithdrawBot._loaded_cards``
-    (``age``, ``name``, ``key`` and, in the browser, ``link``), in list order
-    — newest first. The result is reversed so withdrawal starts at the oldest
-    invitation and works forward, which is how the list is meant to be
-    drained. Cards whose age can't be parsed are skipped, never withdrawn.
-    """
-    selected = []
-    for card in cards:
-        sent = parse_sent_age(card.get("age"), today=today)
-        if sent is not None and sent <= cutoff:
-            selected.append(card)
-    selected.reverse()
-    return selected
-
-
-def targets_until(cards, cutoff, today=None):
-    """Walk up from the oldest card, collecting until ``cutoff`` is reached.
-
-    This is the withdraw-bot equivalent of the message bot's ``-i`` walk: the
-    list is newest-first, so iterating it backwards starts at the oldest
-    invitation and climbs towards today, stopping at the first card proven
-    newer than ``cutoff``. Everything above that point is newer still.
-
-    A card whose age can't be parsed is stepped over rather than treated as a
-    boundary — an unreadable label is not evidence the walk has arrived, and
-    it is never withdrawn either way.
+    (``age``, ``name``, ``key`` and, in the browser, ``link``), in list order.
+    That order is only *roughly* newest-first: LinkedIn sometimes lists an
+    hours-old invitation below month-old ones, so the whole list is filtered
+    — no position is trusted as a boundary — and the result is sorted by age.
+    Cards of the same age keep bottom-up order. Cards whose age can't be
+    parsed are skipped, never withdrawn.
     """
     selected = []
     for card in reversed(list(cards)):
         sent = parse_sent_age(card.get("age"), today=today)
-        if sent is None:
-            continue
-        if sent > cutoff:
-            break
-        selected.append(card)
-    return selected
+        if sent is not None and sent <= cutoff:
+            selected.append((sent, card))
+    selected.sort(key=lambda pair: pair[0])
+    return [card for _, card in selected]
 
 
 class LinkedInWithdrawBot(ClickMixin):
@@ -538,8 +517,16 @@ class LinkedInWithdrawBot(ClickMixin):
             return []
 
     def oldest_label(self):
-        """The "Sent …" line of the last loaded card, or None."""
+        """The "Sent …" line of the oldest loaded card, or None.
+
+        Picked by age, not position: the last card can be hours old while
+        month-old invitations sit above it.
+        """
         labels = [t for t in self.sent_labels() if _SENT_LABEL_RE.match(t)]
+        dated = [(parse_sent_age(t), t) for t in labels]
+        dated = [pair for pair in dated if pair[0] is not None]
+        if dated:
+            return min(dated, key=lambda pair: pair[0])[1]
         return labels[-1] if labels else None
 
     def _loaded_cards(self):
@@ -1124,13 +1111,13 @@ class LinkedInWithdrawBot(ClickMixin):
     def _load_stop_condition(self):
         """When to stop loading pages, or None to load to the end of the list.
 
-        Loading runs downward into older invitations while withdrawal walks
-        back up from the oldest, so by default the bottom has to exist before
-        anything can be withdrawn — nothing short of the end will do.
+        The list is only roughly sorted — old invitations can sit anywhere,
+        even below hours-old ones — so by default every page is loaded and
+        every card past the cutoff is withdrawn, wherever it sits.
 
-        ``--stop-early`` gives that up deliberately: stop as soon as the
-        cutoff is in view. Cheaper on a long list, at the price of never
-        reaching the invitations below it.
+        ``--stop-early`` gives that up deliberately: stop as soon as the last
+        loaded card is past the cutoff. Cheaper on a long list, at the price
+        of never reaching the invitations below it.
 
         ``--max`` bounds the same phase, by loaded card count rather than by
         age, and is enforced inside ``scroll_to_end`` — no label parsing
@@ -1145,7 +1132,7 @@ class LinkedInWithdrawBot(ClickMixin):
         return stop
 
     def run(self):
-        """Load back to the cutoff, then withdraw everything older than it."""
+        """Load the list, then withdraw every card older than the cutoff."""
         if self.until is None:
             raise ValueError(
                 "until is required — refusing to withdraw the whole list.")
@@ -1160,12 +1147,11 @@ class LinkedInWithdrawBot(ClickMixin):
         if not loaded:
             return
 
-        cards = self._loaded_cards()
-        targets = targets_until(cards, self.until)
+        targets = targets_older_than(self._loaded_cards(), self.until)
         if not targets:
             logger.info(
-                f"Nothing to withdraw: the oldest loaded invitation is not "
-                f"provably older than {self.until} "
+                f"Nothing to withdraw: none of the {loaded} loaded "
+                f"invitation(s) is provably older than {self.until} "
                 f"(oldest: {self.oldest_label() or 'unknown'}).")
             if self.max_cards is not None and loaded >= self.max_cards:
                 logger.info(
@@ -1173,16 +1159,6 @@ class LinkedInWithdrawBot(ClickMixin):
                     f"(--max {self.max_cards}) — raise it to reach further "
                     f"back.")
             return
-
-        # The upward walk halts at the first card newer than the cutoff; the
-        # plain filter doesn't. A gap between them means unreadable ages sit
-        # in the middle of the list and some old invitations are out of reach.
-        blocked = len(targets_older_than(cards, self.until)) - len(targets)
-        if blocked > 0:
-            logger.warning(
-                f"{blocked} invitation(s) older than {self.until} sit above "
-                f"the stopping point and will be left alone — re-run to pick "
-                f"them up.")
 
         logger.info(
             f"{len(targets)} invitation(s) to withdraw, oldest first: "
@@ -1199,7 +1175,7 @@ class LinkedInWithdrawBot(ClickMixin):
 
         self._withdraw_all(
             targets,
-            rescan=lambda: targets_until(self._loaded_cards(), self.until))
+            rescan=lambda: targets_older_than(self._loaded_cards(), self.until))
         self._report()
 
     def _withdraw_all(self, targets, rescan):
@@ -1273,10 +1249,10 @@ class LinkedInWithdrawBot(ClickMixin):
     def _run_rolling(self):
         """Withdraw down the list, loading more invitations as it goes.
 
-        The default run has to expand the whole list first, because it walks
-        *up* from the oldest card. This one goes the other way: withdraw
-        every loaded invitation already past the cutoff, load a couple more
-        pages, withdraw again, down to the end of the list. Withdrawn cards
+        The default run expands the whole list before withdrawing anything.
+        This one goes the other way: withdraw every loaded invitation already
+        past the cutoff, load a couple more pages, withdraw again, down to the
+        end of the list. Withdrawn cards
         leave the DOM as new ones arrive, so the page stays about the size it
         started at instead of growing to a thousand rows.
 

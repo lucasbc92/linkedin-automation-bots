@@ -145,14 +145,16 @@ examples:
       # start from what is on screen, withdraw everything past 1 month,
       # load a couple more pages, repeat — down to the oldest invitation
   python main.py withdraw
-      # no --until: just load the list and report how far back it reaches
+      # same as --until 1m: load to the oldest invitation, then withdraw
+      # every one sent 1 month ago or earlier
   python main.py withdraw --probe
       # print which tab, selectors and buttons the bot can see, then exit
 
-by default the list loads all the way to the oldest invitation, then
-withdrawal walks upward from there and stops at the first invitation newer
-than --until; --max bounds the loading instead, so only that many cards are
-ever in the page and withdrawal picks its targets from those
+by default the list loads all the way to the oldest invitation, then every
+loaded invitation past --until is withdrawn, oldest first — wherever it sits,
+since LinkedIn doesn't keep the list strictly sorted; --max bounds the loading
+instead, so only that many cards are ever in the page and withdrawal picks its
+targets from those
 
 --rolling turns that around: it withdraws whatever is already loaded and past
 the cutoff, loads two more pages, and repeats until the list ends — so the
@@ -282,10 +284,9 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     wp.add_argument(
-        "--until", metavar="DATE|AGE",
+        "--until", metavar="DATE|AGE", default="1m",
         help="Withdraw invitations sent on or before this date (2026/06/20) "
-             "or this far back from today (2m, 3w, 10d, 1y). Omit to only "
-             "load the list and report how far back it goes")
+             "or this far back from today (2m, 3w, 10d, 1y). Default: 1m")
     wp.add_argument(
         "--max", dest="max_cards", type=int, metavar="N",
         help="Load at most N invitations, then withdraw the ones among them "

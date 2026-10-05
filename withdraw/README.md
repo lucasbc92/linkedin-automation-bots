@@ -22,17 +22,17 @@ there if you're elsewhere), the bot:
    `common/clicking.py` if that stalls — until the button is gone and the
    oldest invitation is in the DOM. `--stop-early` stops at the cutoff
    instead, which is cheaper but never reaches the oldest.
-2. **Walks upward from the oldest.** With the bottom of the list loaded,
-   `targets_until` iterates backwards — oldest first, climbing towards today
-   — and stops at the first invitation newer than `--until`. Same shape as
-   the message bot's `-i` + `--date-limit` walk.
+2. **Picks every card past the cutoff.** The list is only *roughly*
+   newest-first — LinkedIn sometimes shows an invitation from hours ago
+   below ones from a month ago — so no position in it is trusted as a
+   boundary. With the whole list loaded, `targets_older_than` checks every
+   card and keeps each one past `--until`, sorted oldest first.
 
    Cards show relative ages (`Sent 3 months ago`), never dates. LinkedIn
    rounds down, so that label means *at least* three months: the parsed date
    is the **newest** the invitation can be. A card is withdrawn only when
    that newest-possible date is already past `--until`, so ambiguous cards —
-   and any card whose age can't be parsed — are left alone (an unreadable age
-   is stepped over, not treated as the boundary).
+   and any card whose age can't be parsed — are left alone.
 3. **Withdraws, oldest first.** Each withdrawal opens a confirmation dialog
    whose confirm button repeats the invitee's name
    (`aria-label="Withdraw invitation sent to Camilla Souza"`). The bot checks
@@ -45,10 +45,10 @@ there if you're elsewhere), the bot:
 
 ## Two ways down the list
 
-The default is **expand, then walk up**: load every page, then withdraw from
-the oldest card towards today. It is the thorough one — it always reaches the
-true bottom of the list — but a thousand expanded cards make the page heavy,
-and nothing is withdrawn until the loading finishes.
+The default is **expand, then withdraw**: load every page, then withdraw every
+card past the cutoff, oldest first. It is the thorough one — it always reaches
+the true bottom of the list — but a thousand expanded cards make the page
+heavy, and nothing is withdrawn until the loading finishes.
 
 `--rolling` is the other way round: withdraw whatever is **already loaded** and
 past `--until`, load two more pages, withdraw again, repeat until the list
@@ -63,7 +63,7 @@ cutoff, and a failed withdrawal is never retried inside the same run.
 ## Usage
 
 ```bash
-python main.py withdraw                              # load only, report how far back the list goes
+python main.py withdraw                              # same as --until 1m, after a y/N confirmation
 python main.py withdraw --until 2026/05/01 --dry-run # preview — nothing is clicked
 python main.py withdraw --until 2026/05/01           # withdraw, after a y/N confirmation
 python main.py withdraw --until 1m --max 200 -y      # load 200 cards, withdraw the old ones among them
@@ -72,7 +72,7 @@ python main.py withdraw --until 1m --rolling         # withdraw as it loads, dow
 
 | Flag | Meaning |
 |---|---|
-| `--until YYYY/MM/DD` | Withdraw invitations sent **on or before** this date. Omit to only load the list. |
+| `--until YYYY/MM/DD` | Withdraw invitations sent **on or before** this date, or this far back (`2m`, `3w`). Default `1m`. |
 | `--max N` | Load at most N invitations, then withdraw the ones among them older than `--until`. Keeps the page light. |
 | `--rolling` | Withdraw what is loaded and past `--until`, load two more pages, repeat down to the oldest — instead of expanding the list first. |
 | `--dry-run` | Log what would be withdrawn; click nothing. |
@@ -83,9 +83,10 @@ python main.py withdraw --until 1m --rolling         # withdraw as it loads, dow
 | `--probe` | Print which tab, selectors and buttons the bot can see, then exit. |
 | `-l LEVEL` | Log verbosity (default `INFO`). |
 
-Withdrawal is irreversible and the run is unattended once started, so `--until`
-is required — there is no "withdraw everything" mode — and the first run asks
-for confirmation unless `-y` is passed. Start with `--dry-run`.
+Withdrawal is irreversible and the run is unattended once started, so there is
+always a cutoff (`--until`, `1m` when omitted) — there is no "withdraw
+everything" mode — and the first run asks for confirmation unless `-y` is
+passed. Start with `--dry-run`.
 
 ## Notes
 
@@ -97,11 +98,11 @@ for confirmation unless `-y` is passed. Start with `--dry-run`.
 - `withdraw/examples/withdraw-dialog.html` is the captured confirmation dialog
   the selectors key off; keep it in sync when LinkedIn's markup shifts.
 - **The whole list is heavy.** ~1000 invitations is ~100 pages; the fully
-  expanded DOM slows the browser down, and the default now expands to the end
-  so the upward walk has an oldest card to start from. `--stop-early` skips
-  that cost when the oldest invitations aren't the ones you're after.
+  expanded DOM slows the browser down, and the default expands to the end
+  because old invitations can sit anywhere in it. `--stop-early` skips that
+  cost when the oldest invitations aren't the ones you're after.
 - Age parsing and target selection are pure functions (`parse_sent_age`,
-  `targets_until`, `targets_older_than`) covered by `tests/test_sent_age.py`.
+  `targets_older_than`) covered by `tests/test_sent_age.py`.
 - **When a run finds nothing, run `--probe` first.** It prints the open tabs,
   how many cards each candidate selector matches, whether the withdraw links
   and the "Load more" button are visible, and the last few button labels on
